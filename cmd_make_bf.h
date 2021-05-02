@@ -27,8 +27,8 @@ public:
 	virtual int execute (void);
 	virtual void make_bloom_filter_fasta (void);
 	virtual void make_bloom_filter_kmers (void);
-	virtual void report_stats(const std::string& bfOutFilename, std::uint64_t kmersAdded);
-	virtual std::string build_output_filename(void);
+	virtual void report_stats(const std::string& bfOutFilename, std::uint64_t kmersAdded, size_t filterNum);
+	virtual std::string build_output_filename(size_t filterNum);
 	virtual std::string build_stats_filename(const std::string& bfOutFilename);
 
 	std::string listFilename;
@@ -42,11 +42,13 @@ public:
 	std::uint32_t numThreads;
 	std::uint32_t numHashes;
 	std::uint64_t hashSeed1, hashSeed2;
-	std::uint64_t hashModulus;
-	std::uint64_t numBits;     // nota bene: numBits <= hashModulus
 	std::uint32_t compressor;
+	std::uint32_t numFilters;
+	std::vector<std::uint64_t> hashModulus;
+	std::vector<std::uint64_t> numBits;     // nota bene: numBits <= hashModulus
 	bool          outputStats;
 	std::string   statsFilename;
 	};
 
 #endif // cmd_make_bf_H
+

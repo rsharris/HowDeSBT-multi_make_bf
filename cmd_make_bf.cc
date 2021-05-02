@@ -70,9 +70,10 @@ void MakeBFCommand::usage
 	s << "  --seed=<number>,<number>  both the hash function seeds; the second seed is" << endl;
 	s << "                     only used if more than one hash function is being used" << endl;
 	s << "                     (by default the second seed is the first seed plus 1)" << endl;
-	s << "  --modulus=<M>      set the hash modulus, if larger than the number of bits" << endl;
+	s << "  --modulus=<M>      (cumulative) set the hash modulus, if larger than the" << endl;
+	s << "                     number of bits" << endl;
 	s << "                     (by default this is the same as the number of bits)" << endl;
-	s << "  --bits=<N>         number of bits in the bloom filter" << endl;
+	s << "  --bits=<N>         (cumulative) number of bits in the bloom filter" << endl;
 	s << "                     (default is " << defaultNumBits << ")" << endl;
 	s << "  --uncompressed     make the filter with uncompressed bit vector(s)" << endl;
 	s << "                     (this is the default)" << endl;
@@ -98,6 +99,18 @@ void MakeBFCommand::usage
 	s << "   ..." << endl;
 	s << "Every kmer in the file(s) is added to the filter. No counting is performed," << endl;
 	s << "and --min is not allowed." << endl;
+	s << endl;
+	s << "When --bits=<N> and --modulus=<M> are both used, the M bits that would normally" << endl;
+	s << "be in the bloom filter are subsampled, and only the first N bits are populated." << endl;
+	s << "N must be no larger than M. N can be set as a fraction or percentage of M, e.g." << endl;
+	s << "--bits=1/20 or --bits=5%." << endl;
+	s << endl;
+	//    123456789-123456789-123456789-123456789-123456789-123456789-123456789-123456789
+	s << "If more than one --bits=<N> and more than one --modulus=<M> are used, there" << endl;
+	s << "must be the same number of each. If more than one --modulus=<M> or --bits=<N>" << endl;
+	s << "is used, the number of bits and modulus will be appended to the default output" << endl;
+	s << "filenames. If --out is used instead, it must contain the substrings {bits} and" << endl;
+	s << "{modulus}" << endl;
 	}
 
 void MakeBFCommand::debug_help
@@ -118,21 +131,26 @@ void MakeBFCommand::parse
 	{
 	int		argc;
 	char**	argv;
+	vector<float> numBitsFraction;
 
 	// defaults
 
 	listFilename  = "";
 	inputIsKmers  = false;
 	bfFilename    = "";
-	kmerSize      = defaultKmerSize;      bool kmerSizeSet     = false;
-	minAbundance  = defaultMinAbundance;       minAbundanceSet = false;
+	kmerSize      = defaultKmerSize;      bool kmerSizeSet       = false;
+	minAbundance  = defaultMinAbundance;       minAbundanceSet   = false;
 	numThreads    = defaultNumThreads;
-	numHashes     = defaultNumHashes;     bool numHashesSet    = false;
-	hashSeed1     = 0;                    bool hashSeed1Set    = false;
-	hashSeed2     = 0;                    bool hashSeed2Set    = false;
-	numBits       = defaultNumBits;       bool numBitsSet      = false;
-	hashModulus   = 0;                    bool hashModulusSet  = false;
-	compressor    = bvcomp_uncompressed;  bool compressorSet   = false;
+	numHashes     = defaultNumHashes;     bool numHashesSet      = false;
+	hashSeed1     = 0;                    bool hashSeed1Set      = false;
+	compressor    = bvcomp_uncompressed;  bool compressorSet     = false;
+	hashSeed2     = 0;                    bool hashSeed2Set      = false;
+
+	numFilters = 0;
+	numBits.clear();
+	numBitsFraction.clear();
+	hashModulus.clear();
+
 	outputStats   = false;
 	statsFilename = "";
 
@@ -272,19 +290,27 @@ void MakeBFCommand::parse
 		 ||	(is_prefix_of (arg, "M="))
 		 ||	(is_prefix_of (arg, "--M=")))
 			{
-			hashModulus = string_to_unitized_u64(argVal);
-			hashModulusSet = true;
+			hashModulus.emplace_back(string_to_unitized_u64(argVal));
 			continue;
 			}
 
-		// --bits=<N>
+		// --bits=<fraction> or --bits=<percentage> or --bits=<N>
 
 		if ((is_prefix_of (arg, "--bits="))
 		 ||	(is_prefix_of (arg, "B="))
 		 ||	(is_prefix_of (arg, "--B=")))
 			{
-			numBits = string_to_unitized_u64(argVal);
-			numBitsSet = true;
+			if ((is_suffix_of (arg, "%"))
+			 || (arg.find_last_of("/") != string::npos))  // arg contains "/"
+				{
+				numBits.emplace_back(0);
+				numBitsFraction.emplace_back(string_to_probability(argVal));
+				}
+			else
+				{
+				numBits.emplace_back(string_to_unitized_u64(argVal));
+				numBitsFraction.emplace_back(0.0);
+				}
 			continue;
 			}
 
@@ -395,10 +421,16 @@ void MakeBFCommand::parse
 		if (!numHashesSet)   { numHashes   = bf.numHashes;             numHashesSet   = true; }
 		if (!hashSeed1Set)   { hashSeed1   = bf.hashSeed1;             hashSeed1Set   = true; }
 		if (!hashSeed2Set)   { hashSeed2   = bf.hashSeed2;             hashSeed2Set   = true; }
-		if (!hashModulusSet) { hashModulus = bf.hashModulus;           hashModulusSet = true; }
-		if (!numBitsSet)     { numBits     = bf.numBits;               numBitsSet     = true; }
 		// øøø don't access bvs like this
 		if (!compressorSet)  { compressor  = bf.bvs[0]->compressor();  compressorSet  = true; }
+		if (hashModulus.size() == 0)
+			hashModulus.emplace_back(bf.hashModulus);
+		if (numBits.size() == 0)
+			{
+			numBits.emplace_back(bf.numBits);
+			numBitsFraction.emplace_back(0.0);
+			}
+
 		}
 
 	// sanity checks
@@ -435,23 +467,106 @@ void MakeBFCommand::parse
 	if (numHashes == 0)
 		chastise ("number of hash functions cannot be zero");
 
-	if (numBits < 2)
-		chastise ("number of bits must be at least 2");
-
 	if (numHashes == 1)
 		hashSeed2 = 0;
 	else if (not hashSeed2Set)
 		hashSeed2 = hashSeed1 + 1;
 
-	if (not hashModulusSet)
-		hashModulus = numBits;
-	if (hashModulus < numBits)
-		chastise ("hash modulus (" + std::to_string(hashModulus)+ ")"
-		        + " cannot be less than the number of bits"
-		        + " (" + std::to_string(numBits) + ")");
-
 	if ((inputIsKmers) and (minAbundanceSet))
 		chastise ("cannot use --kmersin with  --min");
+
+	// resolve hashModulus and numBits
+
+	if (numBits.size() == 0)
+		{
+		numBits.emplace_back((u64)defaultNumBits); // (the u64 cast placates the compiler)
+		numBitsFraction.emplace_back(0.0);
+		}
+
+	if ((hashModulus.size() > 1) && (numBits.size() > 1))
+		{
+		if (hashModulus.size() != numBits.size())
+			chastise ("can't understand "
+                    + std::to_string(hashModulus.size()) + " instances of --modulus=<N> with "
+                    + std::to_string(numBits.size()) + " instances of --bits=<N>");
+		}
+
+	if ((hashModulus.size() == 1) && (numBits.size() > 1))
+		{
+		for (size_t ix=1 ; ix<numBits.size() ; ix++)
+			hashModulus.emplace_back(hashModulus[0]);
+		}
+
+	if ((hashModulus.size() > 1) && (numBits.size() == 1))
+		{
+		for (size_t ix=1 ; ix<hashModulus.size() ; ix++)
+			{
+			numBits.emplace_back(numBits[0]);
+			numBitsFraction.emplace_back(numBitsFraction[0]);
+			}
+		}
+
+	bool anyNumBitsIsFraction = false;
+	for (size_t ix=0 ; ix<numBits.size() ; ix++)
+		{
+		if (numBitsFraction[ix] > 0.0)
+			{ anyNumBitsIsFraction = true; break; }
+		}
+
+	if (anyNumBitsIsFraction)
+		{
+		if (hashModulus.size() == 0)
+			chastise ("fractional bit count requires a hash modulus (--modulus=<N>)");
+
+		for (size_t ix=0 ; ix<std::max(hashModulus.size(),numBits.size()) ; ix++)
+			{
+			size_t mIx = (ix < hashModulus.size())? ix : 0;
+			size_t bIx = (ix < numBits.size())? ix : 0;
+			if (numBitsFraction[bIx] == 0.0) continue;
+			u64 nBits = ceil(numBitsFraction[bIx] * hashModulus[mIx]);
+			if (nBits < 2) nBits = 2;
+			numBits[bIx] = nBits;
+			//numBitsFraction[bIx] = 0.0;  // (unnecessary)
+			}
+		}
+
+	for (size_t ix=0 ; ix<numBits.size() ; ix++)
+		{
+		if (numBits[ix] < 2)
+			chastise ("number of bits must be at least 2");
+		}
+
+	if (hashModulus.size() == 0)
+		{
+		for (size_t ix=0 ; ix<numBits.size() ; ix++)
+			hashModulus.emplace_back(numBits[ix]);
+		}
+
+	for (size_t ix=0 ; ix<numBits.size() ; ix++)
+		{
+		if (hashModulus[ix] < numBits[ix])
+			chastise ("hash modulus (" + std::to_string(hashModulus[ix]) + ")"
+			        + " cannot be less than the number of bits"
+			        + " (" + std::to_string(numBits[ix]) + ")");
+		}
+
+	numFilters = numBits.size();
+
+	if ((numFilters > 1) && (not bfFilename.empty()))
+		{
+		string::size_type fieldIx = bfFilename.find_first_of("{bits}");
+		if (fieldIx != string::npos)
+			fieldIx = bfFilename.find_first_of("{modulus}");
+		if (fieldIx == string::npos)
+			chastise ("because more than one instance of --modulus=<N> or --bits=<N> is used,"
+			          "\nthe output filename must contain {bits} and {modulus}");
+		}
+
+	if ((numFilters > 1) && (not statsFilename.empty()))
+		chastise ("because more than one instance of --modulus=<N> or --bits=<N> is used,"
+		          "\ncannot use a stats filename (" + statsFilename + ") in the command");
+
+	// report settings
 
 	if (contains(debug,"settings"))
 		{
@@ -459,8 +574,19 @@ void MakeBFCommand::parse
 		cerr << "numHashes   = " << numHashes   << endl;
 		cerr << "hashSeed1   = " << hashSeed1   << endl;
 		cerr << "hashSeed2   = " << hashSeed2   << endl;
-		cerr << "hashModulus = " << hashModulus << endl;
-		cerr << "numBits     = " << numBits     << endl;
+		if (numFilters == 1)
+			{
+			cerr << "hashModulus = " << hashModulus[0] << endl;
+			cerr << "numBits     = " << numBits[0]     << endl;
+			}
+		else
+			{
+			for (size_t ix=0 ; ix<numFilters ; ix++)
+				{
+				cerr << "hashModulus[" << ix << "] = " << hashModulus[ix] << endl;
+				cerr << "numBits[" << ix << "]     = " << numBits[ix]     << endl;
+				}
+			}
 		cerr << "compressor  = " << compressor  << endl;
 		}
 
@@ -542,7 +668,12 @@ int MakeBFCommand::execute()
 
 void MakeBFCommand::make_bloom_filter_fasta()  // this also supports fastq
 	{
-	string bfOutFilename = build_output_filename();
+	assert (hashModulus.size() == numFilters);
+	assert (numBits.size()     == numFilters);
+
+	vector<string> bfOutFilename;
+	for (size_t ix=0 ; ix<numFilters ; ix++)
+		bfOutFilename.emplace_back(build_output_filename(ix));
 
 	// create the hash table, with jellyfish defaults
 
@@ -563,15 +694,19 @@ void MakeBFCommand::make_bloom_filter_fasta()  // this also supports fastq
 	MerCounter counter(numThreads, merHash, seqFilenames.begin(), seqFilenames.end());
 	counter.exec_join (numThreads);
 
-	// build the bloom filter
+	// build the bloom filters
 
-	BloomFilter* bf = new BloomFilter(bfOutFilename, kmerSize,
-	                                  numHashes, hashSeed1, hashSeed2,
-	                                  numBits, hashModulus);
-	if (contains(debug,"add"))      bf->dbgAdd      = true;
-	if (contains(debug,"contains")) bf->dbgContains = true;
+	vector<BloomFilter*> bf;
+	for (size_t ix=0 ; ix<numFilters ; ix++)
+		{
+		bf.emplace_back(new BloomFilter(bfOutFilename[ix], kmerSize,
+		                                numHashes, hashSeed1, hashSeed2,
+		                                numBits[ix], hashModulus[ix]));
+		if (contains(debug,"add"))      bf[ix]->dbgAdd      = true;
+		if (contains(debug,"contains")) bf[ix]->dbgContains = true;
 
-	bf->new_bits (compressor);
+		bf[ix]->new_bits (compressor);
+		}
 
 	const auto jfAry = merHash.ary();
 	const auto end   = jfAry->end();
@@ -584,10 +719,13 @@ void MakeBFCommand::make_bloom_filter_fasta()  // this also supports fastq
 			if (contains(debug,"kmers"))
 				cerr << keyValuePair.first << " " << keyValuePair.second << endl;
 
-			if (contains(debug,"strings"))
-				bf->add (keyValuePair.first.to_str());
-			else
-				bf->add ((u64*) keyValuePair.first.data());
+			for (size_t ix=0 ; ix<numFilters ; ix++)
+				{
+				if (contains(debug,"strings"))
+					bf[ix]->add (keyValuePair.first.to_str());
+				else
+					bf[ix]->add ((u64*) keyValuePair.first.data());
+				}
 
 			kmersAdded++;
 			}
@@ -595,43 +733,58 @@ void MakeBFCommand::make_bloom_filter_fasta()  // this also supports fastq
 
 	jellyfish::mer_dna::k(savedKmerSize);	// restore jellyfish kmer size
 
-	if (not contains(debug,"v1file"))
+	for (size_t ix=0 ; ix<numFilters ; ix++)
 		{
-		bf->setSizeKnown = true;
-		bf->setSize      = kmersAdded;
-		}
+		if (not contains(debug,"v1file"))
+			{
+			bf[ix]->setSizeKnown = true;
+			bf[ix]->setSize      = kmersAdded;
+			}
 
-	if ((compressor == bvcomp_unc_rrr)
-	 || (compressor == bvcomp_unc_roar))
-		{
-		BitVector* bv = bf->bvs[0];
-		bv->unfinished();
-		}
+		if ((compressor == bvcomp_unc_rrr)
+		 || (compressor == bvcomp_unc_roar))
+			{
+			BitVector* bv = bf[ix]->bvs[0];
+			bv->unfinished();
+			}
 
-	bf->reportSave = true;
-	bf->save();
-	delete bf;
+		bf[ix]->reportSave = true;
+		bf[ix]->save();
+		delete bf[ix];
+		}
 
 	// report stats to a file and/or the console
 
 	if ((outputStats) or (contains(debug,"fprate")))
-		report_stats(bfOutFilename,kmersAdded);
+		{
+		for (size_t ix=0 ; ix<numFilters ; ix++)
+			report_stats(bfOutFilename[ix],kmersAdded,ix);
+		}
 	}
 
 
 void MakeBFCommand::make_bloom_filter_kmers()
 	{
-	string bfOutFilename = build_output_filename();
+	assert (hashModulus.size() == numFilters);
+	assert (numBits.size()     == numFilters);
 
-	// build the bloom filter
+	vector<string> bfOutFilename;
+	for (size_t ix=0 ; ix<numFilters ; ix++)
+		bfOutFilename.emplace_back(build_output_filename(ix));
 
-	BloomFilter* bf = new BloomFilter(bfOutFilename, kmerSize,
-	                                  numHashes, hashSeed1, hashSeed2,
-	                                  numBits, hashModulus);
-	if (contains(debug,"add"))      bf->dbgAdd      = true;
-	if (contains(debug,"contains")) bf->dbgContains = true;
+	// build the bloom filters
 
-	bf->new_bits (compressor);
+	vector<BloomFilter*> bf;
+	for (size_t ix=0 ; ix<numFilters ; ix++)
+		{
+		bf.emplace_back(new BloomFilter(bfOutFilename[ix], kmerSize,
+		                                numHashes, hashSeed1, hashSeed2,
+		                                numBits[ix], hashModulus[ix]));
+		if (contains(debug,"add"))      bf[ix]->dbgAdd      = true;
+		if (contains(debug,"contains")) bf[ix]->dbgContains = true;
+
+		bf[ix]->new_bits (compressor);
+		}
 
 	u64 kmersAdded = 0;
 	for (const auto& kmersFilename : seqFilenames)
@@ -664,39 +817,45 @@ void MakeBFCommand::make_bloom_filter_kmers()
 			if (contains(debug,"kmers"))
 				cerr << kmer << endl;
 
-			bf->add (kmer);
+			for (size_t ix=0 ; ix<numFilters ; ix++)
+				bf[ix]->add (kmer);
 			kmersAdded++;
 			}
 		}
 
-	if (not contains(debug,"v1file"))
+	for (size_t ix=0 ; ix<numFilters ; ix++)
 		{
-		bf->setSizeKnown = true;
-		bf->setSize      = kmersAdded;
-		}
+		if (not contains(debug,"v1file"))
+			{
+			bf[ix]->setSizeKnown = true;
+			bf[ix]->setSize      = kmersAdded;
+			}
 
-	if ((compressor == bvcomp_unc_rrr)
-	 || (compressor == bvcomp_unc_roar))
-		{
-		BitVector* bv = bf->bvs[0];
-		bv->unfinished();
-		}
+		if ((compressor == bvcomp_unc_rrr)
+		 || (compressor == bvcomp_unc_roar))
+			{
+			BitVector* bv = bf[ix]->bvs[0];
+			bv->unfinished();
+			}
 
-	bf->reportSave = true;
-	bf->save();
-	delete bf;
+		bf[ix]->reportSave = true;
+		bf[ix]->save();
+		delete bf[ix];
+		}
 
 	// report stats to a file and/or the console
 
 	if ((outputStats) or (contains(debug,"fprate")))
-		report_stats(bfOutFilename,kmersAdded);
+		{
+		for (size_t ix=0 ; ix<numFilters ; ix++)
+			report_stats(bfOutFilename[ix],kmersAdded,ix);
+		}
 	}
 
 
-void MakeBFCommand::report_stats(const string& bfOutFilename, u64 kmersAdded)
+void MakeBFCommand::report_stats(const string& bfOutFilename, u64 kmersAdded,size_t filterNum)
 	{
-	// (in earlier versions, this incorrectly used numBits instead of hashModulus)
-	double fpRate = BloomFilter::false_positive_rate(numHashes,hashModulus,kmersAdded);
+	double fpRate = BloomFilter::false_positive_rate(numHashes,hashModulus[filterNum],kmersAdded);
 
 	if (outputStats)
 		{
@@ -713,7 +872,7 @@ void MakeBFCommand::report_stats(const string& bfOutFilename, u64 kmersAdded)
 		       << endl;
 		statsF <<         bfOutFilename
 		       << "\t" << numHashes
-		       << "\t" << hashModulus // (in earlier versions, this was incorrectly numBits)
+		       << "\t" << hashModulus[filterNum]
 		       << "\t" << kmersAdded
 		       << "\t" << fpRate
 		       << endl;
@@ -727,7 +886,7 @@ void MakeBFCommand::report_stats(const string& bfOutFilename, u64 kmersAdded)
 	}
 
 
-string MakeBFCommand::build_output_filename()
+string MakeBFCommand::build_output_filename(size_t filterNum)
 	{
 	string bfOutFilename = bfFilename;
 
@@ -736,12 +895,27 @@ string MakeBFCommand::build_output_filename()
 		string ext = "." + BitVector::compressor_to_string(compressor) + ".bf";
 		if (ext == ".uncompressed.bf") ext = ".bf";
 
+		if (numFilters > 1)
+			{
+			string bfSizeText = std::to_string(numBits[filterNum]) + "_of_" + std::to_string(hashModulus[filterNum]);
+			ext = "." + bfSizeText + ext;
+			}
+
 		string seqFilename = seqFilenames[0];
 		string::size_type dotIx = seqFilename.find_last_of(".");
 		if (dotIx == string::npos)
 			bfOutFilename = seqFilename + ext;
 		else
 			bfOutFilename = seqFilename.substr(0,dotIx) + ext;
+		}
+	else if (numFilters > 1)
+		{
+		// note that command line parsing required that bfFilename contain
+		// {bits} and {modulus} when numFilters>1
+		string::size_type fieldIx = bfOutFilename.find_first_of("{bits}");
+		bfOutFilename = bfOutFilename.replace(fieldIx,6,std::to_string(numBits[filterNum]));
+		fieldIx = bfOutFilename.find_first_of("{modulus}");
+		bfOutFilename = bfOutFilename.replace(fieldIx,9,std::to_string(hashModulus[filterNum]));
 		}
 
 	return bfOutFilename;
@@ -765,3 +939,4 @@ string MakeBFCommand::build_stats_filename(const string& bfOutFilename)
 
 	return statsOutFilename;
 	}
+
