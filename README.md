@@ -1,3 +1,5 @@
+THIS IS A DEVELOPMENT FORK OF HowDeSBT
+
 # HowDeSBT
 Sequence Bloom Tree, supporting determined/how split filters
 
