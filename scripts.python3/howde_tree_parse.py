@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Parsing support for howde tree hierarchy files.
 
@@ -30,9 +30,9 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 
 	for (lineNumber,level,name,tags) in read_howde_list(f,keepFileExtension=keepFileExtension):
 		if (debug):
-			print >>stderr, "read %d %s" % (level,name)
+			print("read %d %s" % (level,name),file=stderr)
 			for (dgbLevel,dbgNode) in nodeStack:
-				print >>stderr, "  %d %s" % (dgbLevel,dbgNode.name)
+				print("  %d %s" % (dgbLevel,dbgNode.name),file=stderr)
 
 		if (not keepTags) and (tags != None):
 			exit("%s: line %d of tree input contains extra fields (\"%s\")"
@@ -44,7 +44,7 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 			assert (treeLevel == 0)
 			forest += [tree]
 			if (debug):
-				print >>stderr, "adding %s to forest" % tree.name
+				print("adding %s to forest" % tree.name,file=stderr)
 
 		while (topLevelSame) and (level < topLevel):
 			(sibLevel,sibling) = nodeStack.pop()
@@ -53,7 +53,7 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 				assert (sibLevel == 0)
 				forest += [sibling]
 				if (debug):
-					print >>stderr, "adding %s to forest" % sibling.name
+					print("adding %s to forest" % sibling.name,file=stderr)
 				break
 			(peekLevel,_) = nodeStack[-1]
 			while (peekLevel == sibLevel):
@@ -65,9 +65,9 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 			assert (parentLevel == topLevel-1)
 
 			if (debug):
-				print >>stderr, "  assigning %s children %s" \
-				              % (parent.name,
-				                 ",".join([child.name for child in siblings]))
+				print("  assigning %s children %s"
+				    % (parent.name,",".join([child.name for child in siblings])),
+				     file=stderr)
 			parent.children = siblings
 			for sibling in siblings:
 				sibling.parent = parent
@@ -82,12 +82,12 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 				assert (rootLevel == 0)
 				forest += [tree]
 				if (debug):
-					print >>stderr, "adding %s to forest" % tree.name
+					print("adding %s to forest" % tree.name,file=stderr)
 
 		if (level < 0): break   # (end-of-list)
 
 		if (debug):
-			print >>stderr, "pushing %d %s" % (level,name)
+			print("pushing %d %s" % (level,name),file=stderr)
 		node = TreeNode(name)
 		if (keepTags): node.tags = tags
 		nodeStack += [(level,node)]
@@ -95,8 +95,9 @@ def read_howde_tree_file(f,keepFileExtension=False,keepTags=False,debug=False):
 		topLevel = level
 
 	if (debug):
-		print >>stderr, "returning [%s]" \
-		              % ",".join([tree.name for tree in forest])
+		print("returning [%s]"
+		    % ",".join([tree.name for tree in forest]),
+		      file=stderr)
 
 	return forest
 
@@ -155,7 +156,7 @@ class TreeNode(object):
 		name = self.name
 		if (fileSpec != None):
 			name = fileSpec.replace("{name}",name)
-		print >>f, "%s%s" % ("*"*indent,name)
+		print("%s%s" % ("*"*indent,name),file=f)
 		for child in self.children:
 			child.list_pre_order (f,indent=indent+1,fileSpec=fileSpec)
 
@@ -173,7 +174,7 @@ class TreeNode(object):
 		name = self.name
 		if (fileSpec != None):
 			name = fileSpec.replace("{name}",name)
-		print >>f, "%s%s" % ("*"*indent,name)
+		print("%s%s" % ("*"*indent,name),file=f)
 
 	def list_leaf_groups(self,f=None):
 		if (f == None): f = stdout
@@ -186,7 +187,7 @@ class TreeNode(object):
 				break
 
 		if (allChildrenAreLeafs) and (self.children != []):
-			print >>f, " ".join([child.name for child in self.children])
+			print(" ".join([child.name for child in self.children]),file=f)
 		else:
 			for child in self.children:
 				child.list_leaf_groups(f)
@@ -202,8 +203,9 @@ class TreeNode(object):
 
 	def list_height_etc(self,f=None,indent=0):
 		if (f == None): f = stdout
-		print >>f, "%s%s\theight=%d\tdescendants=%d" \
-		         % ("*"*indent,self.name,self.height,self.subtreeSize-1)
+		print("%s%s\theight=%d\tdescendants=%d"
+		    % ("*"*indent,self.name,self.height,self.subtreeSize-1),
+		      file=f)
 		for child in self.children:
 			child.list_height_etc(f,indent=indent+1)
 

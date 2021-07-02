@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Compute some special stats in a howdesbt allsome tree.
 """
@@ -60,7 +60,7 @@ def main():
 	# compute the stats
 
 	if (reportTable):
-		print "#node\tbits\tall\tsome\tpresent\tabsent\tunresolved"
+		print("#node\tbits\tall\tsome\tpresent\tabsent\tunresolved")
 
 	sumPresent = sumAbsent = 0
 	for root in forest:
@@ -85,17 +85,17 @@ def main():
 			sumAbsent  += node.absent
 
 			if (reportTable):
-				print "%s\t%d\t%d\t%d\t%d\t%d\t%d" \
+				print("%s\t%d\t%d\t%d\t%d\t%d\t%d"
 				    % (node.name,
 				       node.bfSize,node.allOnes,node.someOnes,
-				       node.present,node.absent,node.unresolved)
+				       node.present,node.absent,node.unresolved))
 
 	denom = float(sumPresent+sumAbsent)
 	output = "present/absent = %d/%d = %.1f%%/%.1f%%" \
 	       % (sumPresent,sumAbsent,100*sumPresent/denom,100*sumAbsent/denom)
 
-	if (reportTable): print >>stderr, output
-	else:             print           output
+	if (reportTable): print(output,file=stderr)
+	else:             print(output)
 	
 
 if __name__ == "__main__": main()
