@@ -109,8 +109,8 @@ void MakeBFCommand::usage
 	s << "If more than one --bits=<N> and more than one --modulus=<M> are used, there" << endl;
 	s << "must be the same number of each. If more than one --modulus=<M> or --bits=<N>" << endl;
 	s << "is used, the number of bits and modulus will be appended to the default output" << endl;
-	s << "filenames. If --out is used instead, it must contain the substrings {bits} and" << endl;
-	s << "{modulus}" << endl;
+	s << "filenames. If --out is used instead, it must contain at least one of the" << endl;
+	s << "substrings {bits} or {modulus}" << endl;
 	}
 
 void MakeBFCommand::debug_help
@@ -554,12 +554,12 @@ void MakeBFCommand::parse
 
 	if ((numFilters > 1) && (not bfFilename.empty()))
 		{
-		string::size_type fieldIx = bfFilename.find_first_of("{bits}");
-		if (fieldIx != string::npos)
-			fieldIx = bfFilename.find_first_of("{modulus}");
+		string::size_type fieldIx = bfFilename.find("{bits}");
+		if (fieldIx == string::npos)
+			fieldIx = bfFilename.find("{modulus}");
 		if (fieldIx == string::npos)
 			chastise ("because more than one instance of --modulus=<N> or --bits=<N> is used,"
-			          "\nthe output filename must contain {bits} and {modulus}");
+			          "\nthe output filename must contain {bits} and/or {modulus}");
 		}
 
 	if ((numFilters > 1) && (not statsFilename.empty()))
@@ -911,11 +911,13 @@ string MakeBFCommand::build_output_filename(size_t filterNum)
 	else if (numFilters > 1)
 		{
 		// note that command line parsing required that bfFilename contain
-		// {bits} and {modulus} when numFilters>1
-		string::size_type fieldIx = bfOutFilename.find_first_of("{bits}");
-		bfOutFilename = bfOutFilename.replace(fieldIx,6,std::to_string(numBits[filterNum]));
-		fieldIx = bfOutFilename.find_first_of("{modulus}");
-		bfOutFilename = bfOutFilename.replace(fieldIx,9,std::to_string(hashModulus[filterNum]));
+		// at least one of {bits} or {modulus} when numFilters>1
+		string::size_type fieldIx = bfOutFilename.find("{bits}");
+		if (fieldIx != string::npos)
+			bfOutFilename = bfOutFilename.replace(fieldIx,6,std::to_string(numBits[filterNum]));
+		fieldIx = bfOutFilename.find("{modulus}");
+		if (fieldIx != string::npos)
+			bfOutFilename = bfOutFilename.replace(fieldIx,9,std::to_string(hashModulus[filterNum]));
 		}
 
 	return bfOutFilename;
