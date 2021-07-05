@@ -193,6 +193,18 @@ def main():
 		assert (False), "threading is not implemented yet"
 
 
+	# record the total size-on-disk of each sequence bloom tree
+
+	if (numThreads == None):
+		print("#%s\t%s" % ("bits","sizeOnDisk"))
+		for numBits in bfSizeCandidates:
+			sizeOnDisk = size_on_disk(numBits)
+			print("%d\t%d" % (numBits,sizeOnDisk))
+
+	else:
+		assert (False), "threading is not implemented yet"
+
+
 # simple_bf_size_estimate--
 #	Derive a simple estimate for the size of the bloom filters. This follows
 #	the recommendation in Solomon2017 [1], which is to use the number of
@@ -384,7 +396,7 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 
 
 # howdesbt_build--
-#	Run HowDeSBT to build the sequence bloom tree.
+#	Run HowDeSBT to build a sequence bloom tree.
 
 def howdesbt_build(numBits):
 	workingDirectory = directory_name(numBits)
@@ -408,6 +420,55 @@ def howdesbt_build(numBits):
 		if (outcome.returncode != 0):
 			dump_console_output(outcome)
 			assert (False)
+
+
+# size_on_disk--
+#	Collect the size-on-disk of all the files in a sequence bloom tree.
+#
+# Implementation note:
+#	I chose to use ls -al in the hope that is consistent across different
+#	shells. I also considered ls -lt and stat -c '%n %s' but those seemed to
+#	behave differently on different platforms.
+
+def size_on_disk(numBits):
+	workingDirectory = directory_name(numBits)
+	treeFilename     = "howde.sbt"
+
+	f = open(workingDirectory+"/"+treeFilename,"rt")
+	bfFilenames = read_sbt_filenames(f)
+	f.close()
+
+	totalSizeOnDisk = 0
+	for bfFilename in bfFilenames:
+		path = workingDirectory + "/" + bfFilename
+		command =  ["ls","-al",path]
+
+		if (isDryRun):
+			print("# getting size for %s\n%s" % (path," ".join(command)),file=stderr)
+		if (not isDryRun):
+			outcome = subprocess.run(command,capture_output=True)
+			if (outcome.returncode != 0):
+				dump_console_output(outcome)
+				assert (False)
+
+			try:
+				sizeOnDisk = None
+				for line in outcome.stdout.decode("utf-8").split("\n"):
+					fields = line.split()
+					if (len(fields) < 9) or (fields[8] != path): continue
+					if (sizeOnDisk != None): raise ValueError
+					sizeOnDisk = int(fields[4])
+				if (sizeOnDisk == None): raise ValueError
+			except ValueError:
+				print("# unable to parse size for %s" % path,file=stderr)
+				dump_console_output(outcome)
+				assert (False)
+
+			totalSizeOnDisk += sizeOnDisk
+			if ("sizeondisk" in debug):
+				print("size: %s %d" % (path,sizeOnDisk),file=stderr)
+
+	return totalSizeOnDisk
 
 
 # directory_name--
@@ -442,6 +503,34 @@ def read_filenames(f):
 	return filenames
 
 
+# read_sbt_filenames--
+#	Read bloom filter filenames from a file in sbt format.
+#
+# The sbt tree hierarchy file looks something like this (below). For the
+# purpose of this function, if consists of a filename and an optional prefix of
+# asterisks (which is ignored).
+#	node1.bf
+#	*node2.bf
+#	**node4.bf
+#	***node8.bf
+#	****EXPERIMENT18.bf
+#	****EXPERIMENT7.bf
+#	***node9.bf
+#	****EXPERIMENT12.bf
+#	 ...
+
+def read_sbt_filenames(f):
+	filenames = []
+	for line in f:
+		line = line.strip()
+		indent = 0
+		while (line[indent] == "*"):
+			indent += 1
+		filename = line[indent:]
+		filenames += [filename]
+	return filenames
+
+
 # is_valid_fastq_name--
 #	Determine whether a filename is one we recognize as a fastq file.
 
@@ -464,10 +553,12 @@ def fastq_core_name(filename):
 #	Write the stdout and stderr output of the outcome of a call to 
 #	subprocess.run that had capture_output=True.
 
+# $$$ make this print strings instread of byte arrays
+
 def dump_console_output(outcome):
-	for line in outcome.stdout.split(bytearray("\n",'utf-8')):
+	for line in outcome.stdout.split(bytearray("\n","utf-8")):
 		print(line,file=stderr)
-	for line in outcome.stderr.split(bytearray("\n",'utf-8')):
+	for line in outcome.stderr.split(bytearray("\n","utf-8")):
 		print(line,file=stderr)
 
 
