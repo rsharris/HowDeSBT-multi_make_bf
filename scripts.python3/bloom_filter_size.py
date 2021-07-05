@@ -26,6 +26,9 @@ usage: bloom_filter_size <fastq_files_file> [options]
   --subsample=<fraction>  fraction of bloom filter bits to be used for
                           evaluating a candidate size
                           (default is use the full candidate size)
+  --cluster=<fraction>    fraction of bloom filter bits to be used for
+                          clustering
+                          (default is use the full candidate or subsample size)
   --dryrun                just show the commands we would have run, but don't
                           run them
   --treads=<N>            (T=) number of processing threads
@@ -50,7 +53,8 @@ def main():
 
 	fastqFilesFilename   = None
 	kmerSize             = 20
-	subsample            = None
+	subsampleFraction    = None
+	clusterFraction      = None
 	isDryRun             = False
 	numThreads           = None
 	candidateRatios      = None 
@@ -70,13 +74,22 @@ def main():
 			assert (kmerSize > 0)
 		elif (arg.startswith("--subsample=")):
 			if (argVal == None):
-				subsample = None
+				subsampleFraction = None
 			else:
-				subsample = float_or_fraction(argVal)
-				if (subsample == 1):
-					subsample = None
+				subsampleFraction = float_or_fraction(argVal)
+				if (subsampleFraction == 1):
+					subsampleFraction = None
 				else:
-					assert (0 < subsample <= 1)
+					assert (0 < subsampleFraction <= 1)
+		elif (arg.startswith("--cluster=")):
+			if (argVal == None):
+				clusterFraction = None
+			else:
+				clusterFraction = float_or_fraction(argVal)
+				if (clusterFraction == 1):
+					clusterFraction = None
+				else:
+					assert (0 < clusterFraction <= 1)
 		elif (arg == "--dryrun"):
 			isDryRun = True
 		elif (arg.startswith("--t=")) \
@@ -156,7 +169,7 @@ def main():
 	if (numThreads == None):
 		create_sbt_directories(bfSizeCandidates)
 		for fastqFilename in fastqFilenames:
-			howdesbt_make_bf(fastqFilename,kmerSize,bfSizeCandidates,subsample=subsample)
+			howdesbt_make_bf(fastqFilename,kmerSize,bfSizeCandidates,subsampleFraction=subsampleFraction)
 
 	else:
 		assert (False), "threading is not implemented yet"
@@ -165,7 +178,7 @@ def main():
 
 	if (numThreads == None):
 		for numBits in bfSizeCandidates:
-			howdesbt_cluster(fastqFilenames,numBits)
+			howdesbt_cluster(fastqFilenames,numBits,clusterFraction=clusterFraction)
 
 	else:
 		assert (False), "threading is not implemented yet"
@@ -292,7 +305,7 @@ def create_sbt_directories(numBitsList):
 #	Run HowDeSBT to create a bloom filter file (or several bloom filter files)
 #	for a fastq file.
 
-def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsample=None):
+def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	if (type(numBitsList) == int): numBitsList = [numBitsList]
 	fastqCoreName = fastq_core_name(fastqFilename)
 
@@ -303,15 +316,15 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsample=None):
 	           "K=%d" % kmerSize,
 	           "--min=2"]
 
-	if (subsample == None):
+	if (subsampleFraction == None):
 		command += ["--bits=%d" % numBits for numBits in numBitsList]
 	else:
 		command += ["--modulus=%d" % numBits for numBits in numBitsList]
-		command += ["--bits=%s" % subsample]
+		command += ["--bits=%s" % subsampleFraction]
 
 	command += [fastqFilename]
 
-	if (subsample == None):
+	if (subsampleFraction == None):
 		command += ["--out=B={modulus}/%s.bf" % fastqCoreName]
 	else:
 		command += ["--out=B={bits}/%s.bf" % fastqCoreName]
@@ -331,7 +344,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsample=None):
 #	Run HowDeSBT to cluster bloom filter files as preparation for creating a
 #	sequence bloom tree.
 
-def howdesbt_cluster(fastqFilenames,numBits):
+def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 	workingDirectory  = directory_name(numBits)
 	leafnamesFilename = "leafnames"
 	treeFilename      = "union.sbt"
@@ -346,12 +359,14 @@ def howdesbt_cluster(fastqFilenames,numBits):
 
 	# ask howdesbt to cluster the bloom filter files
 
-	command = [howdesbtCommand,
-	           "cluster",
-	           "--list=%s" % leafnamesFilename,
-	           "--tree=%s" % treeFilename,
-	           "--nodename=node{number}",
-	           "--keepallnodes"]
+	command =  [howdesbtCommand,
+	            "cluster",
+	            "--list=%s" % leafnamesFilename]
+	if (clusterFraction != None):
+		command += ["--bits=%d" % roundup64(clusterFraction*numBits)]
+	command += ["--tree=%s" % treeFilename,
+	            "--nodename=node{number}",
+	            "--keepallnodes"]
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("# running howdesbt cluster for %s\n%s\n%s" \
@@ -492,7 +507,7 @@ def float_or_fraction(s):
 		(numer,denom) = s.split("/",1)
 		return float(numer)/float(denom)
 	elif (s.endswith("%")):
-		return float(s[:1])/100
+		return float(s[:-1])/100
 	else:
 		return float(s)
 

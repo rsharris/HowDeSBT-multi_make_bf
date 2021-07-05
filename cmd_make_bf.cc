@@ -908,10 +908,11 @@ string MakeBFCommand::build_output_filename(size_t filterNum)
 		else
 			bfOutFilename = seqFilename.substr(0,dotIx) + ext;
 		}
-	else if (numFilters > 1)
+	else
 		{
-		// note that command line parsing required that bfFilename contain
+		// note that command line parsing *required* that bfFilename contain
 		// at least one of {bits} or {modulus} when numFilters>1
+
 		string::size_type fieldIx = bfOutFilename.find("{bits}");
 		if (fieldIx != string::npos)
 			bfOutFilename = bfOutFilename.replace(fieldIx,6,std::to_string(numBits[filterNum]));
