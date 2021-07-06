@@ -58,6 +58,7 @@ def main():
 	isDryRun             = False
 	numThreads           = None
 	candidateRatios      = None 
+	candidateExponents   = None
 	overrideSizeEstimate = None
 	debug                = []
 
@@ -107,6 +108,9 @@ def main():
 				candidateRatio = float_or_fraction(candidateRatio)
 				assert (0 < candidateRatio <= 2)
 				candidateRatios += [candidateRatio]
+		elif (arg.startswith("--exponents=")):  # (undocumented)
+			(start,end) = argVal.split(",",2)
+			candidateExponents = (int(start),int(end))
 		elif (arg.startswith("--sizeestimate=")):  # (undocumented)
 			overrideSizeEstimate = int_with_unit(argVal)
 		elif (arg.startswith("--ntcard=")):  # (undocumented)
@@ -128,7 +132,7 @@ def main():
 		usage("you have to give me a fastq file names file")
 
 	if (candidateRatios == None):
-		candidateRatios = default_candidate_ratios()
+		candidateRatios = default_candidate_ratios(exponents=candidateExponents)
 
 	# read the fastq filenames
 
@@ -196,13 +200,22 @@ def main():
 	# record the total size-on-disk of each sequence bloom tree
 
 	if (numThreads == None):
-		print("#%s\t%s" % ("bits","sizeOnDisk"))
+		print("#%s\t%s\t%s\t%s" % ("bfBits","sizeOnDisk","increase","increase%"))
+		prevSizeOnDisk = None
 		for numBits in bfSizeCandidates:
 			sizeOnDisk = size_on_disk(numBits)
-			print("%d\t%d" % (numBits,sizeOnDisk))
+			print("%d\t%d\t%s\t%s" \
+			    % (numBits,sizeOnDisk,
+			       "NA" if (prevSizeOnDisk == None) \
+			            else ("%d" % (sizeOnDisk-prevSizeOnDisk)),
+			       "NA" if (prevSizeOnDisk == None) \
+			            else ("%0.2f%%" % (100*(sizeOnDisk-prevSizeOnDisk)/prevSizeOnDisk))))
+			prevSizeOnDisk = sizeOnDisk
 
 	else:
 		assert (False), "threading is not implemented yet"
+
+# $$$ should we cleanup, discarding all the bf directories?
 
 
 # simple_bf_size_estimate--
@@ -294,8 +307,8 @@ def create_sbt_directories(numBitsList):
 	if (type(numBitsList) == int): numBitsList = [numBitsList]
 
 	for numBits in numBitsList:
-		command1 = ["rm","-rf",directory_name(numBits)]
-		command2 = ["mkdir","-p",directory_name(numBits)]
+		command1 = ["rm","-rf",candidate_directory_name(numBits)]
+		command2 = ["mkdir","-p",candidate_directory_name(numBits)]
 		if (isDryRun) or ("howdesbt" in debug):
 			print("# creating directory for numBits=%d\n%s\n%s" \
 				% (numBits," ".join(command1)," ".join(command2)),
@@ -334,12 +347,8 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["--modulus=%d" % numBits for numBits in numBitsList]
 		command += ["--bits=%s" % subsampleFraction]
 
-	command += [fastqFilename]
-
-	if (subsampleFraction == None):
-		command += ["--out=B={modulus}/%s.bf" % fastqCoreName]
-	else:
-		command += ["--out=B={bits}/%s.bf" % fastqCoreName]
+	command += [fastqFilename,
+	            "--out=%s/%s.bf" % (candidate_directory_template(subsampleFraction),fastqCoreName)]
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("# running howdesbt makebf for \"%s\"\n%s" \
@@ -357,7 +366,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 #	sequence bloom tree.
 
 def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
-	workingDirectory  = directory_name(numBits)
+	workingDirectory  = candidate_directory_name(numBits)
 	leafnamesFilename = "leafnames"
 	treeFilename      = "union.sbt"
 
@@ -399,7 +408,7 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 #	Run HowDeSBT to build a sequence bloom tree.
 
 def howdesbt_build(numBits):
-	workingDirectory = directory_name(numBits)
+	workingDirectory = candidate_directory_name(numBits)
 	treeFilename     = "union.sbt"
 	outTreeFilename  = "howde.sbt"
 
@@ -425,14 +434,16 @@ def howdesbt_build(numBits):
 # size_on_disk--
 #	Collect the size-on-disk of all the files in a sequence bloom tree.
 #
-# Implementation note:
-#	I chose to use ls -al in the hope that is consistent across different
-#	shells. I also considered ls -lt and stat -c '%n %s' but those seemed to
-#	behave differently on different platforms.
+# For information about using os.stat() to compute file size, see
+#	https://stackoverflow.com/questions/2104080/how-can-i-check-file-size-in-python
 
 def size_on_disk(numBits):
-	workingDirectory = directory_name(numBits)
+	workingDirectory = candidate_directory_name(numBits)
 	treeFilename     = "howde.sbt"
+
+	if (isDryRun):
+		print("# getting sizes for %s" % workingDirectory+"/"+treeFilename,file=stderr)
+		return 0
 
 	f = open(workingDirectory+"/"+treeFilename,"rt")
 	bfFilenames = read_sbt_filenames(f)
@@ -441,42 +452,26 @@ def size_on_disk(numBits):
 	totalSizeOnDisk = 0
 	for bfFilename in bfFilenames:
 		path = workingDirectory + "/" + bfFilename
-		command =  ["ls","-al",path]
-
-		if (isDryRun):
-			print("# getting size for %s\n%s" % (path," ".join(command)),file=stderr)
-		if (not isDryRun):
-			outcome = subprocess.run(command,capture_output=True)
-			if (outcome.returncode != 0):
-				dump_console_output(outcome)
-				assert (False)
-
-			try:
-				sizeOnDisk = None
-				for line in outcome.stdout.decode("utf-8").split("\n"):
-					fields = line.split()
-					if (len(fields) < 9) or (fields[8] != path): continue
-					if (sizeOnDisk != None): raise ValueError
-					sizeOnDisk = int(fields[4])
-				if (sizeOnDisk == None): raise ValueError
-			except ValueError:
-				print("# unable to parse size for %s" % path,file=stderr)
-				dump_console_output(outcome)
-				assert (False)
-
-			totalSizeOnDisk += sizeOnDisk
-			if ("sizeondisk" in debug):
-				print("size: %s %d" % (path,sizeOnDisk),file=stderr)
+		sizeOnDisk = os.stat(path).st_size
+		totalSizeOnDisk += sizeOnDisk
+		if ("sizeondisk" in debug):
+			print("size: %s %d" % (path,sizeOnDisk),file=stderr)
 
 	return totalSizeOnDisk
 
 
-# directory_name--
-#	Create a 'standardized' directory name for a particular bloom filter size
-#	candidate.
+# candidate_directory_name, candidate_directory_template--
+#	Create a 'standardized' directory template, or directory name for a
+#	particular bloom filter size candidate.
 
-def directory_name(numBits):
-	return "B=%d" % numBits
+def candidate_directory_template(subsampleFraction):
+	if (subsampleFraction == None):
+		return "temp.B={modulus}"
+	else:
+		return "temp.B={bits}"
+
+def candidate_directory_name(numBits):
+	return "temp.B=%d" % numBits
 
 
 # default_candidate_ratios--
@@ -486,9 +481,11 @@ def directory_name(numBits):
 #	of a candidate. Note that 'expansion' is misleading, as most of the ratios
 #	are below 1.0.
 
-def default_candidate_ratios():
+def default_candidate_ratios(exponents=None):
+	if (exponents == None): exponents = (-10,3)
+	(start,end) = exponents
 	r = sqrt(5/4)
-	return [r**n for n in range(-10,3)]
+	return [r**n for n in range(start,end)]
 
 
 # read_filenames--
