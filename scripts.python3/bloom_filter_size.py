@@ -271,8 +271,10 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 
 		try:
 			if (len(fields) != 2): raise ValueError
-			key   = fields[0]
-			count = int(fields[1][1:]) if (fields[1].startswith("f")) else int(fields[1])
+			if   (fields[0].startswith("F")): key = fields[0]
+			elif (fields[0].startswith("f")): key = int(fields[0][1:])
+			else:                             key = int(fields[0])
+			count = int(fields[1])
 			abundance[key] = count
 		except ValueError:
 			assert (len(fields) == 2), \
@@ -281,7 +283,7 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 
 	f.close()
 
-	assert ("F0" in abundance) and ("1" in abundance), \
+	assert ("F0" in abundance) and (1 in abundance), \
 	       "ntcard output lacks a value for F0 and/or 1, (see \"%s\")" \
 	     % tempFilename
 
@@ -294,9 +296,9 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 
 	if ("ntcard" in debug) and (not isDryRun):
 		print("ntcard abundance[F0] = %d" % abundance["F0"],file=stderr)
-		print("ntcard abundance[f1] = %d" % abundance["1"],file=stderr)
+		print("ntcard abundance[f1] = %d" % abundance[1],file=stderr)
 
-	return abundance["F0"] - abundance["1"]
+	return abundance["F0"] - abundance[1]
 
 
 # create_sbt_directories--
