@@ -9,7 +9,7 @@ References:
       Springer, Cham, 2017.
 """
 
-from sys  import argv,stdin,stdout,stderr,exit
+from sys  import argv,stdin,stdout,stderr,exit,version_info
 from math import sqrt,ceil
 import subprocess
 import os
@@ -249,11 +249,7 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 		    % (tempFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
-		outcome = subprocess.run(command,capture_output=True)
-		if (outcome.returncode != 0):
-			dump_console_output(outcome)
-			assert (False)
-
+		run_shell_command(command)
 
 	if (isDryRun):
 		return 1*1000*1000
@@ -289,7 +285,7 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 	if ("ntcard" not in debug):
 		command = ["rm",tempFilename]
 		if (not isDryRun):
-			outcome = subprocess.run(command,capture_output=True)
+			run_shell_command(command)
 
 	# compute and return the estimate
 
@@ -315,15 +311,8 @@ def create_sbt_directories(numBitsList):
 				  file=stderr)
 
 		if (not isDryRun):
-			outcome1 = subprocess.run(command1,capture_output=True)
-			if (outcome1.returncode != 0):
-				dump_console_output(outcome1)
-				assert (False)
-
-			outcome2 = subprocess.run(command2,capture_output=True)
-			if (outcome2.returncode != 0):
-				dump_console_output(outcome2)
-				assert (False)
+			run_shell_command(command1)
+			run_shell_command(command2)
 
 
 # howdesbt_make_bf--
@@ -355,10 +344,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		    % (fastqFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
-		outcome = subprocess.run(command,capture_output=True)
-		if (outcome.returncode != 0):
-			dump_console_output(outcome)
-			assert (False)
+		run_shell_command(command)
 
 
 # howdesbt_cluster--
@@ -394,14 +380,12 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 		    % (workingDirectory,"cd "+workingDirectory," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
-		outcome = subprocess.run(command,cwd=workingDirectory,capture_output=True)
-		if (outcome.returncode != 0):
-			dump_console_output(outcome)
-			assert (False)
+		run_shell_command(command,cwd=workingDirectory)
 
 	if ("howdesbt" not in debug):
 		command = ["rm",leafnamesFilename]
-		if (not isDryRun): outcome = subprocess.run(command,capture_output=True)
+		if (not isDryRun):
+			run_shell_command(command,cwd=workingDirectory)
 
 
 # howdesbt_build--
@@ -425,10 +409,7 @@ def howdesbt_build(numBits):
 		    % (workingDirectory,"cd "+workingDirectory," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
-		outcome = subprocess.run(command,cwd=workingDirectory,capture_output=True)
-		if (outcome.returncode != 0):
-			dump_console_output(outcome)
-			assert (False)
+		run_shell_command(command,cwd=workingDirectory)
 
 
 # size_on_disk--
@@ -486,6 +467,31 @@ def default_candidate_ratios(exponents=None):
 	(start,end) = exponents
 	r = sqrt(5/4)
 	return [r**n for n in range(start,end)]
+
+
+# run_shell_command--
+#	Run a command in the shell, capturing its console output.
+#
+# nota bene: subprocess.run(...capture_output...) requires python 3.7 or newer
+
+def run_shell_command(command,cwd=None):
+# $$$	if (version_info >= (3,7)): # (python3.7 or newer)
+	if (version_info >= (3,9)): # (python3.7 or newer)
+		if (cwd != None):
+			outcome = subprocess.run(command,cwd=cwd,capture_output=True)
+		else:
+			outcome = subprocess.run(command,capture_output=True)
+	else:
+		if (cwd != None):
+			outcome = subprocess.run(command,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+		else:
+			outcome = subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+
+	if (outcome.returncode != 0):
+		dump_console_output(outcome)
+		assert (False)
+
+	return outcome
 
 
 # read_filenames--
