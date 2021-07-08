@@ -266,8 +266,8 @@ def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
 		line = line.strip()
 		fields = line.split()
 
-		if ("ntcard" in debug):
-			print("line %d: \"%s\"" % (lineNumber,fields),file=stderr)
+		#if ("ntcard" in debug):
+		#	print("line %d: \"%s\"" % (lineNumber,fields),file=stderr)
 
 		try:
 			if (len(fields) != 2): raise ValueError
