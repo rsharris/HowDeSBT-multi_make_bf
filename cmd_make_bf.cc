@@ -105,7 +105,6 @@ void MakeBFCommand::usage
 	s << "N must be no larger than M. N can be set as a fraction or percentage of M, e.g." << endl;
 	s << "--bits=1/20 or --bits=5%." << endl;
 	s << endl;
-	//    123456789-123456789-123456789-123456789-123456789-123456789-123456789-123456789
 	s << "If more than one --bits=<N> and more than one --modulus=<M> are used, there" << endl;
 	s << "must be the same number of each. If more than one --modulus=<M> or --bits=<N>" << endl;
 	s << "is used, the number of bits and modulus will be appended to the default output" << endl;

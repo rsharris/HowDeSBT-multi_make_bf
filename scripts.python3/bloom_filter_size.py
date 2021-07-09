@@ -353,7 +353,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["--bits=%d" % numBits for numBits in numBitsList]
 	else:
 		command += ["--modulus=%d" % numBits for numBits in numBitsList]
-		command += ["--bits=%s" % subsampleFraction]
+		command += ["--bits=%s%%" % (100*subsampleFraction)]
 
 	if (fileType in ["gzipped fastq","gzipped jellyfish"]):
 		command += ["/dev/stdin"]
