@@ -475,9 +475,9 @@ def size_on_disk(numBits):
 
 def candidate_directory_template(subsampleFraction):
 	if (subsampleFraction == None):
-		return "temp.B={modulus}"
-	else:
 		return "temp.B={bits}"
+	else:
+		return "temp.B={modulus}"
 
 def candidate_directory_name(numBits):
 	return "temp.B=%d" % numBits
