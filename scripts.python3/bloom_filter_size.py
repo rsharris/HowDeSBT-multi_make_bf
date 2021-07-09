@@ -3,7 +3,9 @@
 Derive an estimate the proper size for BFs in an SBT.
 
 References:
-  [1] Solomon, Brad, and Carl Kingsford. "Improved search of large
+  [1] Harris, Robert S., and Paul Medvedev. "Improved representation of
+      sequence bloom trees." Bioinformatics 36.3 (2020): 721-727.
+  [2] Solomon, Brad, and Carl Kingsford. "Improved search of large
       transcriptomic sequencing databases using split sequence bloom trees."
       International Conference on Research in Computational Molecular Biology.
       Springer, Cham, 2017.
@@ -19,8 +21,9 @@ def usage(s=None):
 	message = """
 
 usage: bloom_filter_size <fastq_files_file> [options]
-   <fastq_files_file>     file containing a list of fastq files to be
-                          represented by the tree, one fastq file name per line
+   <fastq_files_file>     file containing a list of fastq (or other) files to
+                          be represented by the tree, one fastq file name per
+                          line
   --k=<N>                 (K=) kmer size (number of nucleotides in a kmer)
                           (default is 20)
   --subsample=<fraction>  fraction of bloom filter bits to be used for
@@ -36,7 +39,8 @@ usage: bloom_filter_size <fastq_files_file> [options]
 
 Derive an estimate the proper size for the bloom filters in an SBT.
 
-$$$$ more info here."""
+$$$$ more info here.
+$$$$ including the types of input files."""
 
 	if (s == None): exit (message)
 	else:           exit ("%s%s" % (s,message))
@@ -144,8 +148,11 @@ def main():
 	       "\"%s\" contains no file names" % fastqFilenames
 
 	for fastqFilename in fastqFilenames:
-		assert (is_valid_fastq_name(fastqFilename)), \
-		       "\"%s\" is not a valid fastq filename" % fastqFilename
+		assert (input_file_type(fastqFilename) != None), \
+		       "\"%s\" is not a valid fastq/input filename" % fastqFilename
+		if (overrideSizeEstimate == None):
+			assert (input_file_type(fastqFilename) in ["fastq"]), \
+			       "\"%s\" is not a valid fastq/input filename for ntcard" % fastqFilename
 
 	# get initial estimate the bloom filter size
 
@@ -220,7 +227,7 @@ def main():
 
 # simple_bf_size_estimate--
 #	Derive a simple estimate for the size of the bloom filters. This follows
-#	the recommendation in Solomon2017 [1], which is to use the number of
+#	the recommendation in Solomon2017 [2], which is to use the number of
 #	distinct kmers among all the experiments. Here we assume that single kmers
 #	will be excluded from the tree, so we want F0-f1, where F0 is the number of
 #	distinct kmers and f1 is the number of singletons.
@@ -326,14 +333,18 @@ def create_sbt_directories(numBitsList):
 
 def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	if (type(numBitsList) == int): numBitsList = [numBitsList]
+	fileType = input_file_type(fastqFilename)
 	fastqCoreName = fastq_core_name(fastqFilename)
 
 	# ask howdesbt to build the bloom filter file(s)
 
-	command = [howdesbtCommand,
-	           "makebf",
-	           "K=%d" % kmerSize,
-	           "--min=2"]
+	command = []
+	if (fileType == "gzipped fastq"):
+		command += ["gzip","-dc",fastqFilename,"|"]
+	command += [howdesbtCommand,
+	            "makebf",
+	            "K=%d" % kmerSize,
+	            "--min=2"]
 
 	if (subsampleFraction == None):
 		command += ["--bits=%d" % numBits for numBits in numBitsList]
@@ -341,8 +352,11 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["--modulus=%d" % numBits for numBits in numBitsList]
 		command += ["--bits=%s" % subsampleFraction]
 
-	command += [fastqFilename,
-	            "--out=%s/%s.bf" % (candidate_directory_template(subsampleFraction),fastqCoreName)]
+	if (fileType == "gzipped fastq"):
+		command += ["/dev/stdin"]
+	else:
+		command += [fastqFilename]
+	command += ["--out=%s/%s.bf" % (candidate_directory_template(subsampleFraction),fastqCoreName)]
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("# running howdesbt makebf for \"%s\"\n%s" \
@@ -477,23 +491,54 @@ def default_candidate_ratios(exponents=None):
 # run_shell_command--
 #	Run a command in the shell, capturing its console output.
 #
-# nota bene: subprocess.run(...capture_output...) requires python 3.7 or newer
+# Implementation notes:
+#	(1)	subprocess.run(...capture_output...) requires python 3.7 or newer
+#	(2)	As best I can tell, using subprocess.run(shell=True) to support the
+#	    pipeline case suffers from deadlock when one command outputs too much
+#	    to stdout. 
+#	(3) The pipeline case is thus implemented as is briefly discussed in the
+#	    python docs at
+#		  docs.python.org/3/library/subprocess.html#replacing-shell-pipeline
+#	    incorporating additional details from a three-command example at
+#	      stackoverflow.com/questions/295459/how-do-i-use-subprocess-popen-to-connect-multiple-processes-by-pipes
+
+class Outcome: pass
 
 def run_shell_command(command,cwd=None):
-# $$$	if (version_info >= (3,7)): # (python3.7 or newer)
-	if (version_info >= (3,9)): # (python3.7 or newer)
-		if (cwd != None):
-			outcome = subprocess.run(command,cwd=cwd,capture_output=True)
-		else:
-			outcome = subprocess.run(command,capture_output=True)
+	assert (type(command) == list)
+	commandIsPipeline = ("|" in command)
+
+	if ("commands" in debug):
+		print("[command] "+" ".join(command),file=stderr)
+
+	if (commandIsPipeline):
+		command = list(command) + ["|"]   # (add sentinel)
+		commands = []
+		while (command != []):
+			pipeIx = command.index("|")
+			commands += [command[:pipeIx]]
+			command = command[pipeIx+1:]
+		procs = []
+		procs += [subprocess.Popen(commands[0],stdout=subprocess.PIPE)]
+		for (ix,command) in enumerate(commands[1:]):
+			procs += [subprocess.Popen(command,stdin=procs[ix-1].stdout,stdout=subprocess.PIPE)]
+		lastProc = procs[-1]
+		outcome = Outcome()
+		(outcome.stdout,outcome.stderr) = lastProc.communicate()
+		for proc in procs[:-1]:
+			proc.wait()
+		outcome.returncode = 0
+		for proc in procs:
+			if (proc.returncode != 0):
+				outcome.returncode = proc.returncode
+				break
+	elif (version_info >= (3,7)): # (python3.7 or newer)
+		outcome = subprocess.run(command,cwd=cwd,capture_output=True)
 	else:
-		if (cwd != None):
-			outcome = subprocess.run(command,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-		else:
-			outcome = subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+		outcome = subprocess.run(command,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
 	if (outcome.returncode != 0):
-		dump_console_output(outcome)
+		dump_console_output(command,outcome)
 		assert (False)
 
 	return outcome
@@ -539,12 +584,21 @@ def read_sbt_filenames(f):
 	return filenames
 
 
-# is_valid_fastq_name--
-#	Determine whether a filename is one we recognize as a fastq file.
+# input_file_type--
+#	Determine what type of input file a filename represents, and whether it is
+#	one that we support.
+#
+# Note that we reject filenames containing any whitespace, so that we don't
+# have to worry about whether the commands we use support whitespace.
 
-def is_valid_fastq_name(filename):
-	return (filename.endswith(".fastq")) \
-	    or (filename.endswith(".fq"))
+def input_file_type(filename):
+	if (filename != "".join(filename.split())):
+		return None
+	if (filename.endswith(".fastq")) or (filename.endswith(".fq")):
+		return "fastq"
+	if (filename.endswith(".fastq.gz")) or (filename.endswith(".fq.gz")):
+		return "gzipped fastq"
+	return None
 
 
 # fastq_core_name--
@@ -552,8 +606,10 @@ def is_valid_fastq_name(filename):
 
 def fastq_core_name(filename):
 	baseName = os.path.basename(filename)
-	if (baseName.endswith(".fastq")): return baseName[:-len(".fastq")]
-	if (baseName.endswith(".fq")):    return baseName[:-len(".fq")]
+	if (baseName.endswith(".fastq")):    return baseName[:-len(".fastq")]
+	if (baseName.endswith(".fq")):       return baseName[:-len(".fq")]
+	if (baseName.endswith(".fastq.gz")): return baseName[:-len(".fastq.gz")]
+	if (baseName.endswith(".fq.gz")):    return baseName[:-len(".fq.gz")]
 	raise ValueError
 
 
@@ -563,11 +619,18 @@ def fastq_core_name(filename):
 
 # $$$ make this print strings instread of byte arrays
 
-def dump_console_output(outcome):
-	for line in outcome.stdout.split(bytearray("\n","utf-8")):
-		print(line,file=stderr)
-	for line in outcome.stderr.split(bytearray("\n","utf-8")):
-		print(line,file=stderr)
+def dump_console_output(command,outcome):
+	isFirst = True
+	for line in outcome.stdout.decode().split("\n"):
+		if (isFirst):
+			print(" ".join(command),file=stderr)
+			isFirst = False
+		print("[stdout] "+line,file=stderr)
+	for line in outcome.stderr.decode().split("\n"):
+		if (isFirst):
+			print(" ".join(command),file=stderr)
+			isFirst = False
+		print("[stderr] "+line,file=stderr)
 
 
 # roundup64--
