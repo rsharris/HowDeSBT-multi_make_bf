@@ -343,7 +343,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["gzip","-dc",fastqFilename,"|"]
 	elif (fileType == "gzipped jellyfish"):
 		command += ["gzip","-dc",fastqFilename,"|"]
-		command += [""jellyfish","dump","--column","--lower-count=2","/dev/stdin","|"]
+		command += ["jellyfish","dump","--column","--lower-count=2","/dev/stdin","|"]
 	command += [howdesbtCommand,
 	            "makebf",
 	            "K=%d" % kmerSize,
