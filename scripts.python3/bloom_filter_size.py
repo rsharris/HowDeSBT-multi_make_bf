@@ -519,9 +519,9 @@ def run_shell_command(command,cwd=None):
 			commands += [command[:pipeIx]]
 			command = command[pipeIx+1:]
 		procs = []
-		procs += [subprocess.Popen(commands[0],stdout=subprocess.PIPE)]
+		procs += [subprocess.Popen(commands[0],stdout=subprocess.PIPE,stderr=subprocess.PIPE)]
 		for (ix,command) in enumerate(commands[1:]):
-			procs += [subprocess.Popen(command,stdin=procs[ix-1].stdout,stdout=subprocess.PIPE)]
+			procs += [subprocess.Popen(command,stdin=procs[ix-1].stdout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)]
 		lastProc = procs[-1]
 		outcome = Outcome()
 		(outcome.stdout,outcome.stderr) = lastProc.communicate()
