@@ -336,6 +336,9 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	fileType = input_file_type(fastqFilename)
 	fastqCoreName = fastq_core_name(fastqFilename)
 
+	kmersIn = (fileType == "gzipped jellyfish")
+	minAbundance = 2
+
 	# ask howdesbt to build the bloom filter file(s)
 
 	command = []
@@ -343,13 +346,14 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["gzip","-dc",fastqFilename,"|"]
 	elif (fileType == "gzipped jellyfish"):
 		command += ["gzip","-dc",fastqFilename,"|"]
-		command += ["jellyfish","dump","--column","--lower-count=2","/dev/stdin","|"]
+		command += ["jellyfish","dump","--column","--lower-count=%d"%minAbundance,"/dev/stdin","|"]
 	command += [howdesbtCommand,
 	            "makebf"]
-	if (fileType == "gzipped jellyfish"):
+	if (kmersIn):
 		command += ["--kmersin"]
-	command += ["K=%d" % kmerSize,
-	            "--min=2"]
+	command += ["K=%d" % kmerSize]
+	if (not kmersIn):
+		command += ["--min=%d" % minAbundance]
 
 	if (subsampleFraction == None):
 		command += ["--bits=%d" % numBits for numBits in numBitsList]
