@@ -601,7 +601,7 @@ def input_file_type(filename):
 		return "fastq"
 	if (filename.endswith(".fastq.gz")) or (filename.endswith(".fq.gz")):
 		return "gzipped fastq"
-	if (filename.endswith(".jf.gz")) or (filename.endswith(".jellyfish.gz")):
+	if (filename.endswith(".jellyfish.gz")) or (filename.endswith(".jf.gz")):
 		return "gzipped jellyfish"
 	return None
 
@@ -611,10 +611,12 @@ def input_file_type(filename):
 
 def fastq_core_name(filename):
 	baseName = os.path.basename(filename)
-	if (baseName.endswith(".fastq")):    return baseName[:-len(".fastq")]
-	if (baseName.endswith(".fq")):       return baseName[:-len(".fq")]
-	if (baseName.endswith(".fastq.gz")): return baseName[:-len(".fastq.gz")]
-	if (baseName.endswith(".fq.gz")):    return baseName[:-len(".fq.gz")]
+	if (baseName.endswith(".fastq")):        return baseName[:-len(".fastq")]
+	if (baseName.endswith(".fq")):           return baseName[:-len(".fq")]
+	if (baseName.endswith(".fastq.gz")):     return baseName[:-len(".fastq.gz")]
+	if (baseName.endswith(".fq.gz")):        return baseName[:-len(".fq.gz")]
+	if (baseName.endswith(".jellyfish.gz")): return baseName[:-len(".jellyfish.gz")]
+	if (baseName.endswith(".jf.gz")):        return baseName[:-len(".jf.gz")]
 	raise ValueError
 
 
