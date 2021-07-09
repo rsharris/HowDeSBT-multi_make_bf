@@ -341,6 +341,9 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	command = []
 	if (fileType == "gzipped fastq"):
 		command += ["gzip","-dc",fastqFilename,"|"]
+	elif (fileType == "gzipped jellyfish"):
+		command += ["gzip","-dc",fastqFilename,"|"]
+		command += [""jellyfish","dump","--column","--lower-count=2","/dev/stdin","|"]
 	command += [howdesbtCommand,
 	            "makebf",
 	            "K=%d" % kmerSize,
@@ -352,7 +355,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["--modulus=%d" % numBits for numBits in numBitsList]
 		command += ["--bits=%s" % subsampleFraction]
 
-	if (fileType == "gzipped fastq"):
+	if (fileType in ["gzipped fastq","gzipped jellyfish"]):
 		command += ["/dev/stdin"]
 	else:
 		command += [fastqFilename]
@@ -504,6 +507,12 @@ def default_candidate_ratios(exponents=None):
 
 class Outcome: pass
 
+………
+          time gzip -dc ${skleaves}/${srr}.jf.gz \
+            | jellyfish dump --column --lower-count=${abundance} /dev/stdin \
+            | awk '{ print $1 }' \
+………
+
 def run_shell_command(command,cwd=None):
 	assert (type(command) == list)
 	commandIsPipeline = ("|" in command)
@@ -598,6 +607,8 @@ def input_file_type(filename):
 		return "fastq"
 	if (filename.endswith(".fastq.gz")) or (filename.endswith(".fq.gz")):
 		return "gzipped fastq"
+	if (filename.endswith(".jf.gz")) or (filename.endswith(".jellyfish.gz")):
+		return "gzipped jellyfish"
 	return None
 
 
