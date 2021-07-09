@@ -507,12 +507,6 @@ def default_candidate_ratios(exponents=None):
 
 class Outcome: pass
 
-………
-          time gzip -dc ${skleaves}/${srr}.jf.gz \
-            | jellyfish dump --column --lower-count=${abundance} /dev/stdin \
-            | awk '{ print $1 }' \
-………
-
 def run_shell_command(command,cwd=None):
 	assert (type(command) == list)
 	commandIsPipeline = ("|" in command)
