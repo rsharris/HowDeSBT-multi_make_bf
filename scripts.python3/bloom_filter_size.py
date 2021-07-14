@@ -15,7 +15,7 @@ from sys  import argv,stdin,stdout,stderr,exit,version_info
 from math import sqrt,ceil
 import subprocess
 import os
-
+from stat import S_IEXEC
 
 def usage(s=None):
 	message = """
@@ -215,7 +215,7 @@ def main():
 			    % (numBits,sizeOnDisk,
 			       "NA" if (prevSizeOnDisk == None) \
 			            else ("%d" % (sizeOnDisk-prevSizeOnDisk)),
-			       "NA" if (prevSizeOnDisk == None) \
+			       "NA" if (prevSizeOnDisk in [None,0,0.0]) \
 			            else ("%0.2f%%" % (100*(sizeOnDisk-prevSizeOnDisk)/prevSizeOnDisk))))
 			prevSizeOnDisk = sizeOnDisk
 
@@ -330,16 +330,24 @@ def create_sbt_directories(numBitsList):
 # howdesbt_make_bf--
 #	Run HowDeSBT to create a bloom filter file (or several bloom filter files)
 #	for a fastq file.
+#
+# Implementation notes:
+#	I was unable to implement a deadlock free version of run_shell_command for
+#	commands with pipelines. Thus I have opted to write my command to a
+#	temporary shell script and run that.
 
 def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	if (type(numBitsList) == int): numBitsList = [numBitsList]
 	fileType = input_file_type(fastqFilename)
 	fastqCoreName = fastq_core_name(fastqFilename)
+	candidateDirectory = candidate_directory_template(subsampleFraction)
 
 	kmersIn = (fileType == "gzipped jellyfish")
 	minAbundance = 2
 
 	# ask howdesbt to build the bloom filter file(s)
+
+	withShell = False
 
 	command = []
 	if (fileType == "gzipped fastq"):
@@ -365,14 +373,42 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 		command += ["/dev/stdin"]
 	else:
 		command += [fastqFilename]
-	command += ["--out=%s/%s.bf" % (candidate_directory_template(subsampleFraction),fastqCoreName)]
+	command += ["--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
+
+	# if the command is a pipeline, write it as a temporary shell script
+
+	scriptFilename = None
+
+	commandIsPipeline = ("|" in command)
+	if (commandIsPipeline):
+		scriptDirectory = candidate_directory_name(numBitsList[0])
+		scriptFilename = "%s/%s.sh" % (scriptDirectory,fastqCoreName)
+		f = open(scriptFilename,"wt")
+		print(" ".join(command),file=f)
+		f.close()
+		os.chmod(scriptFilename,os.stat(scriptFilename).st_mode|S_IEXEC) # (make it executable)
+
+		if (isDryRun) or ("howdesbt" in debug):
+			print("# creating temporary shell script \"%s\"\n%s" \
+			    % (scriptFilename," ".join(command)),
+			      file=stderr)
+
+		withShell = True
+		command = [scriptFilename]
+
+	# run the command
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("# running howdesbt makebf for \"%s\"\n%s" \
 		    % (fastqFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
-		run_shell_command(command)
+		run_shell_command(command,withShell=withShell)
+
+	if (scriptFilename != None):
+		command = ["rm",scriptFilename]
+		if (not isDryRun):
+			run_shell_command(command)
 
 
 # howdesbt_cluster--
@@ -505,46 +541,27 @@ def default_candidate_ratios(exponents=None):
 #	(2)	As best I can tell, using subprocess.run(shell=True) to support the
 #	    pipeline case suffers from deadlock when one command outputs too much
 #	    to stdout. 
-#	(3) The pipeline case is thus implemented as is briefly discussed in the
-#	    python docs at
+#	(3) Though the pipeline case is briefly discussed in the python docs at
 #		  docs.python.org/3/library/subprocess.html#replacing-shell-pipeline
-#	    incorporating additional details from a three-command example at
+#	    and a three-command example appears at
 #	      stackoverflow.com/questions/295459/how-do-i-use-subprocess-popen-to-connect-multiple-processes-by-pipes
+#	    I was unable to implement a deadlock free version.
 
 class Outcome: pass
 
-def run_shell_command(command,cwd=None):
+def run_shell_command(command,withShell=False,cwd=None):
 	assert (type(command) == list)
 	commandIsPipeline = ("|" in command)
 
 	if ("commands" in debug):
 		print("[command] "+" ".join(command),file=stderr)
 
-	if (commandIsPipeline):
-		command = list(command) + ["|"]   # (add sentinel)
-		commands = []
-		while (command != []):
-			pipeIx = command.index("|")
-			commands += [command[:pipeIx]]
-			command = command[pipeIx+1:]
-		procs = []
-		procs += [subprocess.Popen(commands[0],stdout=subprocess.PIPE,stderr=subprocess.PIPE)]
-		for (ix,command) in enumerate(commands[1:]):
-			procs += [subprocess.Popen(command,stdin=procs[ix-1].stdout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)]
-		lastProc = procs[-1]
-		outcome = Outcome()
-		(outcome.stdout,outcome.stderr) = lastProc.communicate()
-		for proc in procs[:-1]:
-			proc.wait()
-		outcome.returncode = 0
-		for proc in procs:
-			if (proc.returncode != 0):
-				outcome.returncode = proc.returncode
-				break
-	elif (version_info >= (3,7)): # (python3.7 or newer)
-		outcome = subprocess.run(command,cwd=cwd,capture_output=True)
+	assert (not commandIsPipeline)
+
+	if (version_info >= (3,7)): # (python3.7 or newer)
+		outcome = subprocess.run(command,shell=withShell,cwd=cwd,capture_output=True)
 	else:
-		outcome = subprocess.run(command,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+		outcome = subprocess.run(command,shell=withShell,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
 	if (outcome.returncode != 0):
 		dump_console_output(command,outcome)
