@@ -393,6 +393,9 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 			    % (scriptFilename," ".join(command)),
 			      file=stderr)
 
+		if ("commands" in debug):
+			print("[%s] %s" % (scriptFilename," ".join(command)),file=stderr)
+
 		withShell = True
 		command = [scriptFilename]
 
