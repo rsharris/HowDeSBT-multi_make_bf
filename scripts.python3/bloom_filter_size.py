@@ -179,8 +179,9 @@ def main():
 
 	if (numThreads == None):
 		create_sbt_directories(bfSizeCandidates)
-		for fastqFilename in fastqFilenames:
-			howdesbt_make_bf(fastqFilename,kmerSize,bfSizeCandidates,subsampleFraction=subsampleFraction)
+		for (num,fastqFilename) in enumerate(fastqFilenames):
+			howdesbt_make_bf(fastqFilename,kmerSize,bfSizeCandidates,subsampleFraction=subsampleFraction,
+			                 comment="(#%d of %d)" % (num+1,len(fastqFilenames)))
 
 	else:
 		assert (False), "threading is not implemented yet"
@@ -188,8 +189,9 @@ def main():
 	# cluster the bloom filters for each candidate size
 
 	if (numThreads == None):
-		for numBits in bfSizeCandidates:
-			howdesbt_cluster(fastqFilenames,numBits,clusterFraction=clusterFraction)
+		for (num,numBits) in enumerate(bfSizeCandidates):
+			howdesbt_cluster(fastqFilenames,numBits,clusterFraction=clusterFraction,
+			                 comment="(#%d of %d)" % (num+1,len(bfSizeCandidates)))
 
 	else:
 		assert (False), "threading is not implemented yet"
@@ -197,8 +199,9 @@ def main():
 	# build the sequence bloom tree for each candidate size
 
 	if (numThreads == None):
-		for numBits in bfSizeCandidates:
-			howdesbt_build(numBits)
+		for (num,numBits) in enumerate(bfSizeCandidates):
+			howdesbt_build(numBits,
+			               comment="(#%d of %d)" % (num+1,len(bfSizeCandidates)))
 
 	else:
 		assert (False), "threading is not implemented yet"
@@ -336,11 +339,12 @@ def create_sbt_directories(numBitsList):
 #	commands with pipelines. Thus I have opted to write my command to a
 #	temporary shell script and run that.
 
-def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
+def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None,comment=None):
 	if (type(numBitsList) == int): numBitsList = [numBitsList]
 	fileType = input_file_type(fastqFilename)
 	fastqCoreName = fastq_core_name(fastqFilename)
 	candidateDirectory = candidate_directory_template(subsampleFraction)
+	comment = "" if (comment == None) else (" "+comment)
 
 	kmersIn = (fileType == "gzipped jellyfish")
 	minAbundance = 2
@@ -402,8 +406,8 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 	# run the command
 
 	if (isDryRun) or ("howdesbt" in debug):
-		print("# running howdesbt makebf for \"%s\"\n%s" \
-		    % (fastqFilename," ".join(command)),
+		print("#%s running howdesbt makebf for \"%s\"\n%s" \
+		    % (comment,fastqFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,withShell=withShell)
@@ -418,10 +422,11 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None):
 #	Run HowDeSBT to cluster bloom filter files as preparation for creating a
 #	sequence bloom tree.
 
-def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
+def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None,comment=None):
 	workingDirectory  = candidate_directory_name(numBits)
 	leafnamesFilename = "leafnames"
 	treeFilename      = "union.sbt"
+	comment = "" if (comment == None) else (" "+comment)
 
 	# write the list of bloom filter files
 
@@ -443,8 +448,8 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 	            "--keepallnodes"]
 
 	if (isDryRun) or ("howdesbt" in debug):
-		print("# running howdesbt cluster for %s\n%s\n%s" \
-		    % (workingDirectory,"cd "+workingDirectory," ".join(command)),
+		print("#%s running howdesbt cluster for %s\n%s\n%s" \
+		    % (comment,workingDirectory,"cd "+workingDirectory," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,cwd=workingDirectory)
@@ -458,10 +463,11 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None):
 # howdesbt_build--
 #	Run HowDeSBT to build a sequence bloom tree.
 
-def howdesbt_build(numBits):
+def howdesbt_build(numBits,comment=None):
 	workingDirectory = candidate_directory_name(numBits)
 	treeFilename     = "union.sbt"
 	outTreeFilename  = "howde.sbt"
+	comment = "" if (comment == None) else (" "+comment)
 
 	# ask howdesbt to build the sequence bloom tree
 
@@ -472,8 +478,8 @@ def howdesbt_build(numBits):
 	           "--outtree=%s" % outTreeFilename]
 
 	if (isDryRun) or ("howdesbt" in debug):
-		print("# running howdesbt build for %s\n%s\n%s" \
-		    % (workingDirectory,"cd "+workingDirectory," ".join(command)),
+		print("#%s running howdesbt build for %s\n%s\n%s" \
+		    % (comment,workingDirectory,"cd "+workingDirectory," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,cwd=workingDirectory)
