@@ -13,6 +13,7 @@ References:
 
 from sys  import argv,stdin,stdout,stderr,exit,version_info
 from math import sqrt,ceil
+from multiprocessing.pool import ThreadPool as Pool
 import subprocess
 import os
 from stat import S_IEXEC
@@ -34,7 +35,7 @@ usage: bloom_filter_size <fastq_files_file> [options]
                           (default is use the full candidate or subsample size)
   --dryrun                just show the commands we would have run, but don't
                           run them
-  --treads=<N>            (T=) number of processing threads
+  --threads=<N>           (T=) number of processing threads
                           (default is non-threaded)
 
 Derive an estimate the proper size for the bloom filters in an SBT.
@@ -171,61 +172,107 @@ def main():
 	# many candidate ratios may be less than 1)
 
 	bfSizeCandidates = [roundup64(r*bfSizeEstimate) for r in candidateRatios]
+	bfSizeCandidates.sort()
 	print("bf size candidates are %s" \
 	    % " ".join(["{:,}".format(bfSize) for bfSize in bfSizeCandidates]),
 	      file=stderr)
 
 	# generate the bloom filters for each candidate size
 
-	if (numThreads == None):
-		create_sbt_directories(bfSizeCandidates)
-		for (num,fastqFilename) in enumerate(fastqFilenames):
-			howdesbt_make_bf(fastqFilename,kmerSize,bfSizeCandidates,subsampleFraction=subsampleFraction,
-			                 comment="(#%d of %d)" % (num+1,len(fastqFilenames)))
+	create_sbt_directories(bfSizeCandidates)
 
+	jobs = []
+	for (num,fastqFilename) in enumerate(fastqFilenames):
+		job = SbtMakeBfJob()
+		job.fastqFilename     = fastqFilename
+		job.kmerSize          = kmerSize
+		job.numBitsList       = bfSizeCandidates
+		job.subsampleFraction = subsampleFraction
+		job.comment           = "(#%d of %d)" % (num+1,len(fastqFilenames))
+		jobs += [job]
+
+	if (numThreads == None):
+		for _ in map(howdesbt_make_bf,jobs):
+			pass # $$$ fix this
 	else:
-		assert (False), "threading is not implemented yet"
+		pool = Pool(numThreads)
+		for _ in pool.imap_unordered(howdesbt_make_bf,jobs):
+			pass # $$$ fix this
 
 	# cluster the bloom filters for each candidate size
 
-	if (numThreads == None):
-		for (num,numBits) in enumerate(bfSizeCandidates):
-			howdesbt_cluster(fastqFilenames,numBits,clusterFraction=clusterFraction,
-			                 comment="(#%d of %d)" % (num+1,len(bfSizeCandidates)))
+	jobs = []
+	for (num,numBits) in enumerate(bfSizeCandidates):
+		job = SbtClusterJob()
+		job.fastqFilenames  = fastqFilenames
+		job.numBits         = numBits
+		job.clusterFraction = clusterFraction
+		job.comment         = "(#%d of %d)" % (num+1,len(bfSizeCandidates))
+		jobs += [job]
 
+	if (numThreads == None):
+		for _ in map(howdesbt_cluster,jobs):
+			pass # $$$ fix this
 	else:
-		assert (False), "threading is not implemented yet"
+		pool = Pool(numThreads)
+		for _ in pool.imap_unordered(howdesbt_cluster,jobs):
+			pass # $$$ fix this
 
 	# build the sequence bloom tree for each candidate size
 
+	jobs = []
+	for (num,numBits) in enumerate(bfSizeCandidates):
+		job = SbtBuildJob()
+		job.numBits = numBits
+		job.comment = "(#%d of %d)" % (num+1,len(fastqFilenames))
+		jobs += [job]
+
 	if (numThreads == None):
-		for (num,numBits) in enumerate(bfSizeCandidates):
-			howdesbt_build(numBits,
-			               comment="(#%d of %d)" % (num+1,len(bfSizeCandidates)))
-
+		for _ in map(howdesbt_build,jobs):
+			pass # $$$ fix this
 	else:
-		assert (False), "threading is not implemented yet"
-
+		pool = Pool(numThreads)
+		for _ in pool.imap_unordered(howdesbt_build,jobs):
+			pass # $$$ fix this
 
 	# record the total size-on-disk of each sequence bloom tree
 
+	jobs = []
+	for (num,numBits) in enumerate(bfSizeCandidates):
+		job = SizeOnDiskJob()
+		job.numBits = numBits
+		jobs += [job]
+
+	numBitsToSizeOnDisk = {}
 	if (numThreads == None):
-		print("#%s\t%s\t%s\t%s" % ("bfBits","sizeOnDisk","increase","increase%"))
-		prevSizeOnDisk = None
-		for numBits in bfSizeCandidates:
-			sizeOnDisk = size_on_disk(numBits)
-			print("%d\t%d\t%s\t%s" \
-			    % (numBits,sizeOnDisk,
-			       "NA" if (prevSizeOnDisk == None) \
-			            else ("%d" % (sizeOnDisk-prevSizeOnDisk)),
-			       "NA" if (prevSizeOnDisk in [None,0,0.0]) \
-			            else ("%0.2f%%" % (100*(sizeOnDisk-prevSizeOnDisk)/prevSizeOnDisk))))
-			prevSizeOnDisk = sizeOnDisk
-
+		for (numBits,sizeOnDisk) in map(size_on_disk,jobs):
+			numBitsToSizeOnDisk[numBits] = sizeOnDisk
 	else:
-		assert (False), "threading is not implemented yet"
+		pool = Pool(numThreads)
+		jobOrder = []
+		for (numBits,sizeOnDisk) in pool.imap_unordered(size_on_disk,jobs):
+			numBitsToSizeOnDisk[numBits] = sizeOnDisk
+			jobOrder += [numBits]
 
-# $$$ should we cleanup, discarding all the bf directories?
+		if ("pool" in debug):
+			print("job order: %s" % ",".join(["%d"%numBits for numBits in jobOrder]),
+			      file=stderr)
+
+	# report results
+
+	print("#%s\t%s\t%s\t%s" % ("bfBits","sizeOnDisk","increase","increase%"))
+	prevSizeOnDisk = None
+	for numBits in bfSizeCandidates:
+		sizeOnDisk = numBitsToSizeOnDisk[numBits]
+		print("%d\t%d\t%s\t%s" \
+			% (numBits,sizeOnDisk,
+			   "NA" if (prevSizeOnDisk == None) \
+					else ("%d" % (sizeOnDisk-prevSizeOnDisk)),
+			   "NA" if (prevSizeOnDisk in [None,0,0.0]) \
+					else ("%0.2f%%" % (100*(sizeOnDisk-prevSizeOnDisk)/prevSizeOnDisk))))
+		prevSizeOnDisk = sizeOnDisk
+
+	# $$$ should we cleanup, discarding all the bf directories?
 
 
 # simple_bf_size_estimate--
@@ -339,49 +386,56 @@ def create_sbt_directories(numBitsList):
 #	commands with pipelines. Thus I have opted to write my command to a
 #	temporary shell script and run that.
 
-def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None,comment=None):
-	if (type(numBitsList) == int): numBitsList = [numBitsList]
-	fileType = input_file_type(fastqFilename)
-	fastqCoreName = fastq_core_name(fastqFilename)
-	candidateDirectory = candidate_directory_template(subsampleFraction)
-	comment = "" if (comment == None) else (" "+comment)
+class SbtMakeBfJob: pass
+
+def howdesbt_make_bf(job):
+	if (type(job.numBitsList) == int): numBitsList = [job.numBitsList]
+	else:                              numBitsList = list(job.numBitsList)
+
+	fileType = input_file_type(job.fastqFilename)
+	fastqCoreName = fastq_core_name(job.fastqFilename)
+	candidateDirectory = candidate_directory_template(job.subsampleFraction)
+	comment = "" if (job.comment == None) else (" "+job.comment)
 
 	kmersIn = (fileType == "gzipped jellyfish")
 	minAbundance = 2
 
 	# ask howdesbt to build the bloom filter file(s)
 
-	withShell = False
+	if (job.subsampleFraction == None):
+		bitsArgs = ["--bits=%d" % numBits for numBits in numBitsList]
+	else:
+		bitsArgs = ["--modulus=%d" % numBits for numBits in numBitsList] \
+		         + ["--bits=%s%%" % (100*job.subsampleFraction)]
 
-	command = []
 	if (fileType == "gzipped fastq"):
-		command += ["gzip","-dc",fastqFilename,"|"]
+		command = ["gzip","-dc",job.fastqFilename,"|",
+		           howdesbtCommand,"makebf",
+		           "K=%d" % job.kmerSize,
+		           "--min=%d" % minAbundance] \
+		        + bitsArgs \
+		        + ["/dev/stdin",
+		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
 	elif (fileType == "gzipped jellyfish"):
-		command += ["gzip","-dc",fastqFilename,"|"]
-		command += ["jellyfish","dump","--column","--lower-count=%d"%minAbundance,"/dev/stdin","|"]
-	command += [howdesbtCommand,
-	            "makebf"]
-	if (kmersIn):
-		command += ["--kmersin"]
-	command += ["K=%d" % kmerSize]
-	if (not kmersIn):
-		command += ["--min=%d" % minAbundance]
-
-	if (subsampleFraction == None):
-		command += ["--bits=%d" % numBits for numBits in numBitsList]
+		command = ["gzip","-dc",job.fastqFilename,"|",
+		           "jellyfish","dump","--column","--lower-count=%d"%minAbundance,"/dev/stdin","|",
+		           howdesbtCommand,"makebf",
+		           "--kmersin","K=%d" % job.kmerSize] \
+		        + bitsArgs \
+		        + ["/dev/stdin",
+		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
 	else:
-		command += ["--modulus=%d" % numBits for numBits in numBitsList]
-		command += ["--bits=%s%%" % (100*subsampleFraction)]
-
-	if (fileType in ["gzipped fastq","gzipped jellyfish"]):
-		command += ["/dev/stdin"]
-	else:
-		command += [fastqFilename]
-	command += ["--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
+		command = [howdesbtCommand,"makebf",
+		           "K=%d" % job.kmerSize,
+		           "--min=%d" % minAbundance] \
+		        + bitsArgs \
+		        + [job.fastqFilename,
+		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
 
 	# if the command is a pipeline, write it as a temporary shell script
 
 	scriptFilename = None
+	withShell = False
 
 	commandIsPipeline = ("|" in command)
 	if (commandIsPipeline):
@@ -407,7 +461,7 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None,c
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("#%s running howdesbt makebf for \"%s\"\n%s" \
-		    % (comment,fastqFilename," ".join(command)),
+		    % (comment,job.fastqFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,withShell=withShell)
@@ -417,22 +471,26 @@ def howdesbt_make_bf(fastqFilename,kmerSize,numBitsList,subsampleFraction=None,c
 		if (not isDryRun):
 			run_shell_command(command)
 
+	return None
+
 
 # howdesbt_cluster--
 #	Run HowDeSBT to cluster bloom filter files as preparation for creating a
 #	sequence bloom tree.
 
-def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None,comment=None):
-	workingDirectory  = candidate_directory_name(numBits)
+class SbtClusterJob: pass
+
+def howdesbt_cluster(job):
+	workingDirectory  = candidate_directory_name(job.numBits)
 	leafnamesFilename = "leafnames"
 	treeFilename      = "union.sbt"
-	comment = "" if (comment == None) else (" "+comment)
+	comment = "" if (job.comment == None) else (" "+job.comment)
 
 	# write the list of bloom filter files
 
 	if (not isDryRun):
 		f = open(workingDirectory+"/"+leafnamesFilename,"wt")
-		for fastqCoreName in map(fastq_core_name,fastqFilenames):
+		for fastqCoreName in map(fastq_core_name,job.fastqFilenames):
 			print("%s.bf" % fastqCoreName,file=f)
 		f.close()
 
@@ -441,8 +499,8 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None,comment=None):
 	command =  [howdesbtCommand,
 	            "cluster",
 	            "--list=%s" % leafnamesFilename]
-	if (clusterFraction != None):
-		command += ["--bits=%d" % roundup64(clusterFraction*numBits)]
+	if (job.clusterFraction != None):
+		command += ["--bits=%d" % roundup64(job.clusterFraction*job.numBits)]
 	command += ["--tree=%s" % treeFilename,
 	            "--nodename=node{number}",
 	            "--keepallnodes"]
@@ -463,11 +521,13 @@ def howdesbt_cluster(fastqFilenames,numBits,clusterFraction=None,comment=None):
 # howdesbt_build--
 #	Run HowDeSBT to build a sequence bloom tree.
 
-def howdesbt_build(numBits,comment=None):
-	workingDirectory = candidate_directory_name(numBits)
+class SbtBuildJob: pass
+
+def howdesbt_build(job):
+	workingDirectory = candidate_directory_name(job.numBits)
 	treeFilename     = "union.sbt"
 	outTreeFilename  = "howde.sbt"
-	comment = "" if (comment == None) else (" "+comment)
+	comment = "" if (job.comment == None) else (" "+job.comment)
 
 	# ask howdesbt to build the sequence bloom tree
 
@@ -491,8 +551,10 @@ def howdesbt_build(numBits,comment=None):
 # For information about using os.stat() to compute file size, see
 #	https://stackoverflow.com/questions/2104080/how-can-i-check-file-size-in-python
 
-def size_on_disk(numBits):
-	workingDirectory = candidate_directory_name(numBits)
+class SizeOnDiskJob: pass
+
+def size_on_disk(job):
+	workingDirectory = candidate_directory_name(job.numBits)
 	treeFilename     = "howde.sbt"
 
 	if (isDryRun):
@@ -511,7 +573,7 @@ def size_on_disk(numBits):
 		if ("sizeondisk" in debug):
 			print("size: %s %d" % (path,sizeOnDisk),file=stderr)
 
-	return totalSizeOnDisk
+	return (job.numBits,totalSizeOnDisk)
 
 
 # candidate_directory_name, candidate_directory_template--
