@@ -638,6 +638,9 @@ def run_shell_command(command,withShell=False,cwd=None):
 		dump_console_output(command,outcome)
 		assert (False)
 
+	del outcome.stdout
+	del outcome.stderr
+
 	return outcome
 
 
