@@ -21,8 +21,8 @@ from stat import S_IEXEC
 def usage(s=None):
 	message = """
 
-usage: bloom_filter_size <fastq_files_file> [options]
-   <fastq_files_file>     file containing a list of fastq (or other) files to
+usage: bloom_filter_size <input_files_file> [options]
+   <input_files_file>     file containing a list of fastq (or other) files to
                           be represented by the tree, one fastq file name per
                           line
   --k=<N>                 (K=) kmer size (number of nucleotides in a kmer)
@@ -40,8 +40,12 @@ usage: bloom_filter_size <fastq_files_file> [options]
 
 Derive an estimate the proper size for the bloom filters in an SBT.
 
-$$$$ more info here.
-$$$$ including the types of input files."""
+The <input_files_file> contains a list of files, each to represented by a leaf
+int the SBT. These are usually fast files, but jellyfish kmer-count files are
+also allowed. Valid extensions are .fastq, .fq, .fastq.gz, .fq.gz, .jellyfish,
+.jf, .jellyfish.gz, or .jf.gz.
+
+$$$$ more info here."""
 
 	if (s == None): exit (message)
 	else:           exit ("%s%s" % (s,message))
@@ -142,18 +146,18 @@ def main():
 	# read the fastq filenames
 
 	filenamesF = open(fastqFilesFilename,"rt")
-	fastqFilenames = read_filenames(filenamesF)
+	inputFilenames = read_filenames(filenamesF)
 	filenamesF.close()
 
-	assert (len(fastqFilenames) > 0), \
-	       "\"%s\" contains no file names" % fastqFilenames
+	assert (len(inputFilenames) > 0), \
+	       "\"%s\" contains no file names" % inputFilenames
 
-	for fastqFilename in fastqFilenames:
-		assert (input_file_type(fastqFilename) != None), \
-		       "\"%s\" is not a valid fastq/input filename" % fastqFilename
+	for inputFilename in inputFilenames:
+		assert (input_file_type(inputFilename) != None), \
+		       "\"%s\" is not a valid fastq/input filename" % inputFilename
 		if (overrideSizeEstimate == None):
-			assert (input_file_type(fastqFilename) in ["fastq"]), \
-			       "\"%s\" is not a valid fastq/input filename for ntcard" % fastqFilename
+			assert (input_file_type(inputFilename) in ["fastq"]), \
+			       "\"%s\" is not a valid fastq/input filename for ntcard" % inputFilename
 
 	# get initial estimate the bloom filter size
 
@@ -163,7 +167,7 @@ def main():
 		    % "{:,}".format(bfSizeEstimate),
 		      file=stderr)
 	else:
-		bfSizeEstimate = simple_bf_size_estimate(fastqFilenames,"temp.",kmerSize)
+		bfSizeEstimate = simple_bf_size_estimate(inputFilenames,"temp.",kmerSize)
 		print("simple bf size estimate is %s" \
 		    % "{:,}".format(bfSizeEstimate),
 		      file=stderr)
@@ -177,18 +181,18 @@ def main():
 	    % " ".join(["{:,}".format(bfSize) for bfSize in bfSizeCandidates]),
 	      file=stderr)
 
-	# generate the bloom filters for each candidate size
+	# generate the uncompressed bloom filters for each candidate size
 
 	create_sbt_directories(bfSizeCandidates)
 
 	jobs = []
-	for (num,fastqFilename) in enumerate(fastqFilenames):
+	for (num,inputFilename) in enumerate(inputFilenames):
 		job = SbtMakeBfJob()
-		job.fastqFilename     = fastqFilename
+		job.inputFilename     = inputFilename
 		job.kmerSize          = kmerSize
 		job.numBitsList       = bfSizeCandidates
 		job.subsampleFraction = subsampleFraction
-		job.comment           = "(#%d of %d)" % (num+1,len(fastqFilenames))
+		job.comment           = "(#%d of %d)" % (num+1,len(inputFilenames))
 		jobs += [job]
 
 	if (numThreads == None):
@@ -204,7 +208,7 @@ def main():
 	jobs = []
 	for (num,numBits) in enumerate(bfSizeCandidates):
 		job = SbtClusterJob()
-		job.fastqFilenames  = fastqFilenames
+		job.inputFilenames  = inputFilenames
 		job.numBits         = numBits
 		job.clusterFraction = clusterFraction
 		job.comment         = "(#%d of %d)" % (num+1,len(bfSizeCandidates))
@@ -223,8 +227,9 @@ def main():
 	jobs = []
 	for (num,numBits) in enumerate(bfSizeCandidates):
 		job = SbtBuildJob()
-		job.numBits = numBits
-		job.comment = "(#%d of %d)" % (num+1,len(fastqFilenames))
+		job.numBits        = numBits
+		job.inputFilenames = inputFilenames
+		job.comment        = "(#%d of %d)" % (num+1,len(inputFilenames))
 		jobs += [job]
 
 	if (numThreads == None):
@@ -293,14 +298,14 @@ def main():
 # now have no prefix (e.g. "1 1360743" used to be "f1 1360743"), so we tolerate
 # that format.
 
-def simple_bf_size_estimate(fastqFilenames,tempFilenamePrefix,kmerSize):
+def simple_bf_size_estimate(inputFilenames,tempFilenamePrefix,kmerSize):
 	# ask ntcard to count kmer abundances
 
 	tempFilename = "%s_k%d.hist" % (tempFilenamePrefix,kmerSize)
 	command = [ntcardCommand,
 	           "--kmer=%d" % kmerSize,
 	           "--pref=%s" % tempFilenamePrefix] \
-	        + fastqFilenames
+	        + inputFilenames
 	if (isDryRun) or ("ntcard" in debug):
 		print("# running ntcard, output to \"%s\"\n%s" \
 		    % (tempFilename," ".join(command)),
@@ -392,12 +397,11 @@ def howdesbt_make_bf(job):
 	if (type(job.numBitsList) == int): numBitsList = [job.numBitsList]
 	else:                              numBitsList = list(job.numBitsList)
 
-	fileType = input_file_type(job.fastqFilename)
-	fastqCoreName = fastq_core_name(job.fastqFilename)
+	fileType = input_file_type(job.inputFilename)
+	inputCoreName = input_core_name(job.inputFilename)
 	candidateDirectory = candidate_directory_template(job.subsampleFraction)
 	comment = "" if (job.comment == None) else (" "+job.comment)
 
-	kmersIn = (fileType == "gzipped jellyfish")
 	minAbundance = 2
 
 	# ask howdesbt to build the bloom filter file(s)
@@ -409,28 +413,35 @@ def howdesbt_make_bf(job):
 		         + ["--bits=%s%%" % (100*job.subsampleFraction)]
 
 	if (fileType == "gzipped fastq"):
-		command = ["gzip","-dc",job.fastqFilename,"|",
+		command = ["gzip","-dc",job.inputFilename,"|",
 		           howdesbtCommand,"makebf",
 		           "K=%d" % job.kmerSize,
 		           "--min=%d" % minAbundance] \
 		        + bitsArgs \
 		        + ["/dev/stdin",
-		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
+		           "--out=%s/%s.bf" % (candidateDirectory,inputCoreName)]
+	elif (fileType == "jellyfish"):
+		command = ["jellyfish","dump","--column","--lower-count=%d"%minAbundance,job.inputFilename,"|",
+		           howdesbtCommand,"makebf",
+		           "--kmersin","K=%d" % job.kmerSize] \
+		        + bitsArgs \
+		        + ["/dev/stdin",
+		           "--out=%s/%s.bf" % (candidateDirectory,inputCoreName)]
 	elif (fileType == "gzipped jellyfish"):
-		command = ["gzip","-dc",job.fastqFilename,"|",
+		command = ["gzip","-dc",job.inputFilename,"|",
 		           "jellyfish","dump","--column","--lower-count=%d"%minAbundance,"/dev/stdin","|",
 		           howdesbtCommand,"makebf",
 		           "--kmersin","K=%d" % job.kmerSize] \
 		        + bitsArgs \
 		        + ["/dev/stdin",
-		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
+		           "--out=%s/%s.bf" % (candidateDirectory,inputCoreName)]
 	else:
 		command = [howdesbtCommand,"makebf",
 		           "K=%d" % job.kmerSize,
 		           "--min=%d" % minAbundance] \
 		        + bitsArgs \
-		        + [job.fastqFilename,
-		           "--out=%s/%s.bf" % (candidateDirectory,fastqCoreName)]
+		        + [job.inputFilename,
+		           "--out=%s/%s.bf" % (candidateDirectory,inputCoreName)]
 
 	# if the command is a pipeline, write it as a temporary shell script
 
@@ -440,7 +451,7 @@ def howdesbt_make_bf(job):
 	commandIsPipeline = ("|" in command)
 	if (commandIsPipeline):
 		scriptDirectory = candidate_directory_name(numBitsList[0])
-		scriptFilename = "%s/%s.sh" % (scriptDirectory,fastqCoreName)
+		scriptFilename = "%s/%s.sh" % (scriptDirectory,inputCoreName)
 		f = open(scriptFilename,"wt")
 		print(" ".join(command),file=f)
 		f.close()
@@ -461,7 +472,7 @@ def howdesbt_make_bf(job):
 
 	if (isDryRun) or ("howdesbt" in debug):
 		print("#%s running howdesbt makebf for \"%s\"\n%s" \
-		    % (comment,job.fastqFilename," ".join(command)),
+		    % (comment,job.inputFilename," ".join(command)),
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,withShell=withShell)
@@ -490,8 +501,8 @@ def howdesbt_cluster(job):
 
 	if (not isDryRun):
 		f = open(workingDirectory+"/"+leafnamesFilename,"wt")
-		for fastqCoreName in map(fastq_core_name,job.fastqFilenames):
-			print("%s.bf" % fastqCoreName,file=f)
+		for inputCoreName in map(input_core_name,job.inputFilenames):
+			print("%s.bf" % inputCoreName,file=f)
 		f.close()
 
 	# ask howdesbt to cluster the bloom filter files
@@ -543,6 +554,18 @@ def howdesbt_build(job):
 		      file=stderr)
 	if (not isDryRun):
 		run_shell_command(command,cwd=workingDirectory)
+
+	# delete the input tree file and the uncompressed bloom filters
+
+	if ("howdesbt" not in debug):
+		command = ["rm","%s/%s" % (workingDirectory,treeFilename)]
+		if (not isDryRun):
+			run_shell_command(command)
+		for inputFilename in job.inputFilenames:
+			inputCoreName = input_core_name(inputFilename)
+			command = ["rm","%s/%s.bf" % (workingDirectory,inputCoreName)]
+			if (not isDryRun):
+				run_shell_command(command)
 
 
 # size_on_disk--
@@ -698,20 +721,24 @@ def input_file_type(filename):
 		return "fastq"
 	if (filename.endswith(".fastq.gz")) or (filename.endswith(".fq.gz")):
 		return "gzipped fastq"
+	if (filename.endswith(".jellyfish")) or (filename.endswith(".jf")):
+		return "jellyfish"
 	if (filename.endswith(".jellyfish.gz")) or (filename.endswith(".jf.gz")):
 		return "gzipped jellyfish"
 	return None
 
 
-# fastq_core_name--
-#	Return the 'core' name of a fastq filename.
+# input_core_name--
+#	Return the 'core' name of a fastq or jellyfish filename.
 
-def fastq_core_name(filename):
+def input_core_name(filename):
 	baseName = os.path.basename(filename)
 	if (baseName.endswith(".fastq")):        return baseName[:-len(".fastq")]
 	if (baseName.endswith(".fq")):           return baseName[:-len(".fq")]
 	if (baseName.endswith(".fastq.gz")):     return baseName[:-len(".fastq.gz")]
 	if (baseName.endswith(".fq.gz")):        return baseName[:-len(".fq.gz")]
+	if (baseName.endswith(".jellyfish")):    return baseName[:-len(".jellyfish")]
+	if (baseName.endswith(".jf")):           return baseName[:-len(".jf")]
 	if (baseName.endswith(".jellyfish.gz")): return baseName[:-len(".jellyfish.gz")]
 	if (baseName.endswith(".jf.gz")):        return baseName[:-len(".jf.gz")]
 	raise ValueError
