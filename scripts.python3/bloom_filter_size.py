@@ -175,7 +175,8 @@ def main():
 	# derive candidate sizes from the candidate expansion ratios (note that
 	# many candidate ratios may be less than 1)
 
-	bfSizeCandidates = [roundup64(r*bfSizeEstimate) for r in candidateRatios]
+	# was bfSizeCandidates = [roundup64(r*bfSizeEstimate) for r in candidateRatios]
+	bfSizeCandidates = [roundup(r*bfSizeEstimate) for r in candidateRatios]
 	bfSizeCandidates.sort()
 	print("bf size candidates are %s" \
 	    % " ".join(["{:,}".format(bfSize) for bfSize in bfSizeCandidates]),
@@ -511,7 +512,8 @@ def howdesbt_cluster(job):
 	            "cluster",
 	            "--list=%s" % leafnamesFilename]
 	if (job.clusterFraction != None):
-		command += ["--bits=%d" % roundup64(job.clusterFraction*job.numBits)]
+		# was command += ["--bits=%d" % roundup64(job.clusterFraction*job.numBits)]
+		command += ["--bits=%d" % roundup(job.clusterFraction*job.numBits)]
 	command += ["--tree=%s" % treeFilename,
 	            "--nodename=node{number}",
 	            "--keepallnodes"]
@@ -764,11 +766,18 @@ def dump_console_output(command,outcome):
 		print("[stderr] "+line,file=stderr)
 
 
+# roundup--
+#	Round a positive value up, to the next integer
+
+def roundup(v):
+	return int(ceil(v))
+
+
 # roundup64--
 #	Round a positive value up, to the next multiple of 64.
 
 def roundup64(v):
-	v = ceil(v)
+	v = int(ceil(v))
 	return ((v+63)//64)*64
 
 
