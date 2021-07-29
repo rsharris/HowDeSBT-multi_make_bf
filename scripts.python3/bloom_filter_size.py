@@ -12,11 +12,14 @@ References:
 """
 
 from sys  import argv,stdin,stdout,stderr,exit,version_info
-from math import sqrt,ceil
+from math import sqrt,log,ceil
 from multiprocessing.pool import ThreadPool as Pool
 import subprocess
 import os
 from stat import S_IEXEC
+
+standardStep = sqrt(5/4)
+
 
 def usage(s=None):
 	message = """
@@ -27,9 +30,13 @@ usage: bloom_filter_size <input_files_file> [options]
                           line
   --k=<N>                 (K=) kmer size (number of nucleotides in a kmer)
                           (default is 20)
+  --stable=<percent>      stabilization threshold (see note below)
+                          (default is 5%)
   --subsample=<fraction>  fraction of bloom filter bits to be used for
                           evaluating a candidate size
-                          (default is use the full candidate size)
+                          (default is use the 1/40th of the candidate size)
+  --subsample=none        use the full candidate size for evaluating a
+                          candidate size
   --cluster=<fraction>    fraction of bloom filter bits to be used for
                           clustering
                           (default is use the full candidate or subsample size)
@@ -45,7 +52,11 @@ int the SBT. These are usually fast files, but jellyfish kmer-count files are
 also allowed. Valid extensions are .fastq, .fq, .fastq.gz, .fq.gz, .jellyfish,
 .jf, .jellyfish.gz, or .jf.gz.
 
-$$$$ more info here."""
+The 'stabilization threshold' is the relative increase in tree size (as bytes
+on disk), below which we consider the size to be stable. The BF size we report
+(as BF vector size in bits) is the lowest candidate which is stable. The
+increase in tree size is measured relative to an increase in BF size of
+sqrt(5/4)."""
 
 	if (s == None): exit (message)
 	else:           exit ("%s%s" % (s,message))
@@ -60,16 +71,17 @@ def main():
 
 	# parse the command line
 
-	fastqFilesFilename   = None
-	kmerSize             = 20
-	subsampleFraction    = None
-	clusterFraction      = None
-	isDryRun             = False
-	numThreads           = None
-	candidateRatios      = None 
-	candidateExponents   = None
-	overrideSizeEstimate = None
-	debug                = []
+	fastqFilesFilename     = None
+	kmerSize               = 20
+	stabilizationThreshold = .05
+	subsampleFraction      = 1./40
+	clusterFraction        = None
+	isDryRun               = False
+	numThreads             = None
+	candidateRatios        = None 
+	candidateExponents     = None
+	overrideSizeEstimate   = None
+	debug                  = []
 
 	for arg in argv[1:]:
 		if ("=" in arg):
@@ -82,8 +94,11 @@ def main():
 		  or (arg.startswith("K=")):
 			kmerSize = int(argVal)
 			assert (kmerSize > 0)
+		elif (arg.startswith("--stable=")):
+			stabilizationThreshold = float_or_fraction(argVal)
+			assert (0 < stabilizationThreshold < 1)
 		elif (arg.startswith("--subsample=")):
-			if (argVal == None):
+			if (argVal == "none"):
 				subsampleFraction = None
 			else:
 				subsampleFraction = float_or_fraction(argVal)
@@ -91,6 +106,8 @@ def main():
 					subsampleFraction = None
 				else:
 					assert (0 < subsampleFraction <= 1)
+		elif (arg == "--nosubsample"):
+			subsampleFraction = None
 		elif (arg.startswith("--cluster=")):
 			if (argVal == None):
 				clusterFraction = None
@@ -264,21 +281,69 @@ def main():
 			print("job order: %s" % ",".join(["%d"%numBits for numBits in jobOrder]),
 			      file=stderr)
 
+	# choose the threshold
+
+	meetsThreshold        = {}
+	numBitsToNormStep     = {}
+	numBitsToIncrease     = {}
+	numBitsToNormIncrease = {}
+
+	for (ix,numBits) in enumerate(bfSizeCandidates):
+		if (ix == 0): continue
+		prevNumBits = bfSizeCandidates[ix-1]
+		assert (numBits > prevNumBits)
+
+		prevSizeOnDisk = numBitsToSizeOnDisk[prevNumBits]
+		sizeOnDisk     = numBitsToSizeOnDisk[numBits]
+
+		if (sizeOnDisk < prevSizeOnDisk):
+			meetsThreshold[numBits] = True
+			continue
+
+		step               = numBits / prevNumBits
+		normalizedStep     = log(step) / log(standardStep)
+		increase           = (sizeOnDisk / prevSizeOnDisk) - 1
+		normalizedIncrease = ((1+increase)**(1/normalizedStep)) - 1
+
+		meetsThreshold[numBits]        = (normalizedIncrease <= stabilizationThreshold)
+		numBitsToNormStep[numBits]     = normalizedStep
+		numBitsToIncrease[numBits]     = increase
+		numBitsToNormIncrease[numBits] = normalizedIncrease
+
 	# report results
 
-	print("#%s\t%s\t%s\t%s" % ("bfBits","sizeOnDisk","increase","increase%"))
-	prevSizeOnDisk = None
+	print("#%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+	    % ("bfBits","step","sizeOnDisk","predictedSize",
+	       "increase%","normalized%","stable"))
+
+	firstStableNumBits = None
+
 	for numBits in bfSizeCandidates:
 		sizeOnDisk = numBitsToSizeOnDisk[numBits]
-		print("%d\t%d\t%s\t%s" \
-			% (numBits,sizeOnDisk,
-			   "NA" if (prevSizeOnDisk == None) \
-					else ("%d" % (sizeOnDisk-prevSizeOnDisk)),
-			   "NA" if (prevSizeOnDisk in [None,0,0.0]) \
-					else ("%0.2f%%" % (100*(sizeOnDisk-prevSizeOnDisk)/prevSizeOnDisk))))
-		prevSizeOnDisk = sizeOnDisk
 
-	# $$$ should we cleanup, discarding all the bf directories?
+		if (firstStableNumBits == None):
+			if (numBits in meetsThreshold) and (meetsThreshold[numBits]):
+				firstStableNumBits = numBits
+
+		print("%d\t%s\t%d\t%d\t%s\t%s\t%s" \
+			% (numBits,
+			   "NA" if (numBits not in numBitsToNormStep) \
+					else ("%0.2f" % numBitsToNormStep[numBits]),
+			   sizeOnDisk,
+			   int(ceil(sizeOnDisk/subsampleFraction)),
+			   "NA" if (numBits not in numBitsToIncrease) \
+					else ("%0.2f%%" % (100*numBitsToIncrease[numBits])),
+			   "NA" if (numBits not in numBitsToNormIncrease) \
+					else ("%0.2f%%" % (100*numBitsToNormIncrease[numBits])),
+			   "NA" if (numBits not in meetsThreshold) \
+					else ["no","yes"][meetsThreshold[numBits]]))
+
+	if (firstStableNumBits != None):
+		print("proper size is estimated to be %d" % firstStableNumBits)
+	else:
+		print("no size met the stability threshold, max tried was %d" % max(bfSizeCandidates))
+
+	# $$$ should we cleanup, discarding all the candidate bf directories?
 
 
 # simple_bf_size_estimate--
@@ -625,7 +690,7 @@ def candidate_directory_name(numBits):
 def default_candidate_ratios(exponents=None):
 	if (exponents == None): exponents = (-10,3)
 	(start,end) = exponents
-	r = sqrt(5/4)
+	r = standardStep
 	return [r**n for n in range(start,end)]
 
 
