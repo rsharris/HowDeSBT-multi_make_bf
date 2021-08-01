@@ -19,6 +19,7 @@ import os
 from stat import S_IEXEC
 
 standardStep = sqrt(5/4)
+programVersion = "0.1.0"
 
 
 def usage(s=None):
@@ -44,8 +45,9 @@ usage: bloom_filter_size <input_files_file> [options]
                           run them
   --threads=<N>           (T=) number of processing threads
                           (default is non-threaded)
+  --version               report this scripts's version number
 
-Derive an estimate the proper size for the bloom filters in an SBT.
+Derive an estimate of the proper size for the bloom filters in an SBT.
 
 The <input_files_file> contains a list of files, each to represented by a leaf
 int the SBT. These are usually fast files, but jellyfish kmer-count files are
@@ -87,7 +89,11 @@ def main():
 		if ("=" in arg):
 			argVal = arg.split("=",1)[1]
 
-		if   (arg.startswith("--k=")) \
+		if (arg in ["--help","--h","-help","-h"]):
+			usage()
+		elif (arg in ["--version","--v","--V","-version","-v","-V"]):
+			exit("%s, version %s" % ("bloom_filter_size",programVersion))
+		elif (arg.startswith("--k=")) \
 		  or (arg.startswith("--K=")) \
 		  or (arg.startswith("--kmer=")) \
 		  or (arg.startswith("--kmersize=")) \
@@ -192,7 +198,6 @@ def main():
 	# derive candidate sizes from the candidate expansion ratios (note that
 	# many candidate ratios may be less than 1)
 
-	# was bfSizeCandidates = [roundup64(r*bfSizeEstimate) for r in candidateRatios]
 	bfSizeCandidates = [roundup(r*bfSizeEstimate) for r in candidateRatios]
 	bfSizeCandidates.sort()
 	print("bf size candidates are %s" \
@@ -215,11 +220,11 @@ def main():
 
 	if (numThreads == None):
 		for _ in map(howdesbt_make_bf,jobs):
-			pass # $$$ fix this
+			pass
 	else:
 		pool = Pool(numThreads)
 		for _ in pool.imap_unordered(howdesbt_make_bf,jobs):
-			pass # $$$ fix this
+			pass
 
 	# cluster the bloom filters for each candidate size
 
@@ -234,11 +239,11 @@ def main():
 
 	if (numThreads == None):
 		for _ in map(howdesbt_cluster,jobs):
-			pass # $$$ fix this
+			pass
 	else:
 		pool = Pool(numThreads)
 		for _ in pool.imap_unordered(howdesbt_cluster,jobs):
-			pass # $$$ fix this
+			pass
 
 	# build the sequence bloom tree for each candidate size
 
@@ -252,11 +257,11 @@ def main():
 
 	if (numThreads == None):
 		for _ in map(howdesbt_build,jobs):
-			pass # $$$ fix this
+			pass
 	else:
 		pool = Pool(numThreads)
 		for _ in pool.imap_unordered(howdesbt_build,jobs):
-			pass # $$$ fix this
+			pass
 
 	# record the total size-on-disk of each sequence bloom tree
 
@@ -343,7 +348,9 @@ def main():
 	else:
 		print("no size met the stability threshold, max tried was %d" % max(bfSizeCandidates))
 
-	# $$$ should we cleanup, discarding all the candidate bf directories?
+	# cleanup-- discard all the candidate bf directories
+
+	destroy_sbt_directories(bfSizeCandidates)
 
 
 # simple_bf_size_estimate--
@@ -447,6 +454,23 @@ def create_sbt_directories(numBitsList):
 			run_shell_command(command1)
 			run_shell_command(command2)
 
+
+# destroy_sbt_directories--
+#	Delete the directories created by create_sbt_directories(), and any files
+#	in them.
+
+def destroy_sbt_directories(numBitsList):
+	if (type(numBitsList) == int): numBitsList = [numBitsList]
+
+	for numBits in numBitsList:
+		command = ["rm","-rf",candidate_directory_name(numBits)]
+		if (isDryRun) or ("howdesbt" in debug):
+			print("# creating directory for numBits=%d\n%s" \
+				% (numBits," ".join(command)),
+				  file=stderr)
+
+		if (not isDryRun):
+			run_shell_command(command)
 
 # howdesbt_make_bf--
 #	Run HowDeSBT to create a bloom filter file (or several bloom filter files)
@@ -577,7 +601,6 @@ def howdesbt_cluster(job):
 	            "cluster",
 	            "--list=%s" % leafnamesFilename]
 	if (job.clusterFraction != None):
-		# was command += ["--bits=%d" % roundup64(job.clusterFraction*job.numBits)]
 		command += ["--bits=%d" % roundup(job.clusterFraction*job.numBits)]
 	command += ["--tree=%s" % treeFilename,
 	            "--nodename=node{number}",
@@ -815,8 +838,6 @@ def input_core_name(filename):
 #	Write the stdout and stderr output of the outcome of a call to 
 #	subprocess.run that had capture_output=True.
 
-# $$$ make this print strings instread of byte arrays
-
 def dump_console_output(command,outcome):
 	isFirst = True
 	for line in outcome.stdout.decode().split("\n"):
@@ -836,14 +857,6 @@ def dump_console_output(command,outcome):
 
 def roundup(v):
 	return int(ceil(v))
-
-
-# roundup64--
-#	Round a positive value up, to the next multiple of 64.
-
-def roundup64(v):
-	v = int(ceil(v))
-	return ((v+63)//64)*64
 
 
 # int_with_unit--
